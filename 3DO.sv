@@ -329,9 +329,9 @@ module emu
 		
 		"-;",
 		"R0,Reset;",
-		"J1,A,B,C,P,X,R,L,T/Start,Coin;",
-		"jn,A,B,X,Start,Select,R,L,L2,R2;",
-		"jp,A,B,X,Start,Select,R,L,L2,R2;",
+		"J1,A,B,C,Play/Start,Stop/Coin,R,L,Trigger(Flightstick);",
+		"jn,A,B,X,Start,Select,R,L,L2;",
+		"jp,A,B,X,Start,Select,R,L,L2;",
 		"V,v",`BUILD_DATE
 	};
 
@@ -821,10 +821,10 @@ module emu
 		.MOUSE_EN(status[36]&~mouse_mask),
 		.ARCADE_SERVICE(status[39]),
 	
-		.joystick_0(joystick_0[12:0]),
-		.joystick_1(joystick_1[12:0]),
-		.joystick_2(joystick_2[12:0]),
-		.joystick_3(joystick_3[12:0]),
+		.joystick_0(joystick_0[11:0]),
+		.joystick_1(joystick_1[11:0]),
+		.joystick_2(joystick_2[11:0]),
+		.joystick_3(joystick_3[11:0]),
 		.joy0_x0(joy0_x0),
 		.joy0_y0(joy0_y0),
 		.joy0_x1(joy0_x1),

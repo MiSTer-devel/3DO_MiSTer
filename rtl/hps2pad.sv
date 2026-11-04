@@ -16,10 +16,10 @@ module HPS2PAD (
 	input              MOUSE_EN,
 	input              ARCADE_SERVICE,
 	
-	input      [12: 0] joystick_0,
-	input      [12: 0] joystick_1,
-	input      [12: 0] joystick_2,
-	input      [12: 0] joystick_3,
+	input      [11: 0] joystick_0,
+	input      [11: 0] joystick_1,
+	input      [11: 0] joystick_2,
+	input      [11: 0] joystick_3,
 	input      [7 : 0] joy0_x0,
 	input      [7 : 0] joy0_y0,
 	input      [7 : 0] joy0_x1,
@@ -161,7 +161,7 @@ module HPS2PAD (
 	};
 	
 	//arcade control
-	wire [31:0] arcade_silli = {8'hC0, 8'h00, {1'b0, 1'b0, joystick_0[12], joystick_1[12], 1'b0, joystick_1[11], joystick_0[11], ARCADE_SERVICE}, 8'h00};
+	wire [31:0] arcade_silli = {8'hC0, 8'h00, {1'b0, 1'b0, joystick_0[8], joystick_1[8], 1'b0, joystick_1[7], joystick_0[7], ARCADE_SERVICE}, 8'h00};
 	wire [31:0] arcade_tb = {
 		8'h49,
 		1'b0,
