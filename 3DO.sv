@@ -329,6 +329,8 @@ module emu
 		"-;",
 		"R0,Reset;",
 		"J1,A,B,C,P,X,R,L,T/Start,Coin;",
+		"jn,A,B,X,Start,Select,R,L,L2,R2;",
+		"jp,A,B,X,Start,Select,R,L,L2,R2;",
 		"V,v",`BUILD_DATE
 	};
 
