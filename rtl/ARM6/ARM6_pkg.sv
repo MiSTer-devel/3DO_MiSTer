@@ -647,6 +647,8 @@ package ARM6_PKG;
 		
 		{rot,arith,dir} = {&t[1:0],t[1]&~t[0],|t[1:0]};
 		rrx = (t == 3'b111 && sa == 8'h00);
+		// Immediate ASR encodes #32 as zero; register-controlled zero is unchanged.
+		if (t == 3'b110 && sa == 8'h00) sa = 8'd32;
 		
 		{cl0,tmp0,cr0} = !sa[0]   ? {1'b0,  val, 1'b0} : (dir ? { 1'b0,  val[ 0: 0]&{ 1{rot}}|{ 1{ val[31]}}&{ 1{arith}},  val[31: 1],  val[ 0]} : { val[31],  val[30:0], { 1{1'b0}}, 1'b0 });
 		{cl1,tmp1,cr1} = !sa[1]   ? { cl0, tmp0,  cr0} : (dir ? { 1'b0, tmp0[ 1: 0]&{ 2{rot}}|{ 2{tmp0[31]}}&{ 2{arith}}, tmp0[31: 2], tmp0[ 1]} : {tmp0[30], tmp0[29:0], { 2{1'b0}}, 1'b0 });
