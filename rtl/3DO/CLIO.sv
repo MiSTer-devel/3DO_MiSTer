@@ -193,6 +193,23 @@ module CLIO
 	wire DSP_EORAM32_SEL = (A >= (16'h3800>>2) && A <= (16'h39FF>>2));
 	wire DSP_EORAM16_SEL = (A >= (16'h3C00>>2) && A <= (16'h3FFF>>2));
 	wire UNCLE_SEL = (A >= (16'hC000>>2) && A <= (16'hC00F>>2));
+	
+	//RandSeed (0x38) and RandSample (0x3C). The kernel's ReadHardwareRandomNumber reads RandSample
+	//twice and combines the values, and software can loop until it gets the numbers it wants (the
+	//BIOS audio CD player builds a track permutation that way at start), so RandSample must change
+	//between reads. The hardware samples a video noise source (not documented): a free-running
+	//32-bit maximal LFSR (x^32+x^22+x^2+x+1) stepped every clock stands in for it.
+	bit  [31: 0] RAND_SEED;
+	bit  [31: 0] RAND_LFSR;
+	always @(posedge CLK or negedge RST_N) begin
+		if (!RST_N) begin
+			RAND_LFSR <= 32'h00000001;
+		end
+		else begin
+			RAND_LFSR <= {RAND_LFSR[30:0], RAND_LFSR[31] ^ RAND_LFSR[21] ^ RAND_LFSR[1] ^ RAND_LFSR[0]};
+		end
+	end
+	
 	bit          INFO_CODE;
 	always @(posedge CLK or negedge RST_N) begin
 		bit          EINT_N_OLD;
@@ -219,6 +236,7 @@ module CLIO
 			HDELAY <= '0;
 			UNCLE_BITS <= '0;
 			{ADBIO_D,ADBIO_O} <= '0;
+			RAND_SEED <= '0;
 			
 			IO_ST <= IO_IDLE;
 			IO_XBUS_RD <= 0;
@@ -370,6 +388,7 @@ module CLIO
 									6'h08: VINT0 <= CPU_DI[10:0];
 									6'h0C: VINT1 <= CPU_DI[10:0];
 									6'h28: begin CSTAT <= CPU_DI; CSTAT[6] <= &CPU_DI[5:4]; end
+									6'h38: RAND_SEED <= CPU_DI;
 									default:;
 								endcase
 								IO_ST <= IO_IDLE;
@@ -896,6 +915,8 @@ module CLIO
 				6'h28: CPU_DO <= CSTAT;
 				6'h30: CPU_DO <= {16'h0000,5'b00000,HCNT};
 				6'h34: CPU_DO <= {16'h0000,4'b0000,FLD,2'b00,VCNT};
+				6'h38: CPU_DO <= RAND_SEED;
+				6'h3C: CPU_DO <= RAND_LFSR;
 				default: CPU_DO <= '0;
 			endcase
 		else if (INTERRUPT_SEL)
