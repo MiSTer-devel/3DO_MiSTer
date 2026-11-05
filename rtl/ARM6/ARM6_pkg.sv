@@ -654,6 +654,8 @@ package ARM6_PKG;
 		{cl3,tmp3,cr3} = !sa[3]   ? { cl2, tmp2,  cr2} : (dir ? { 1'b0, tmp2[ 7: 0]&{ 8{rot}}|{ 8{tmp2[31]}}&{ 8{arith}}, tmp2[31: 8], tmp2[ 7]} : {tmp2[24], tmp2[23:0], { 8{1'b0}}, 1'b0 });
 		{cl4,tmp4,cr4} = !sa[4]   ? { cl3, tmp3,  cr3} : (dir ? { 1'b0, tmp3[15: 0]&{16{rot}}|{16{tmp3[31]}}&{16{arith}}, tmp3[31:16], tmp3[15]} : {tmp3[16], tmp3[15:0], {16{1'b0}}, 1'b0 });
 		{cl5,tmp5,cr5} = !sa[7:5] ? { cl4, tmp4,  cr4} : (dir ? { 1'b0, tmp4[31: 0]&{32{rot}}|{32{tmp4[31]}}&{32{arith}},              tmp4[31]} : {tmp4[ 0],             {32{1'b0}}, 1'b0 });
+		// Logical register shifts greater than 32 discard every bit, including carry.
+		if (!t[2] && !t[1] && sa > 8'd32) return 33'd0;
 		return rrx ? {val[0],ci,val[31:1]} : {dir?cr5:cl5,tmp5};
 	endfunction
 	
