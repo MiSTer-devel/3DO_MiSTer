@@ -55,6 +55,12 @@ module emu
 	output        HDMI_BLACKOUT,
 	output        HDMI_BOB_DEINT,
 
+	input   [5:0] LFB_FMT,
+	input  [31:0] LFB_BASE,
+	input  [11:0] LFB_WIDTH,
+	input  [11:0] LFB_HEIGHT,
+	input  [13:0] LFB_STRIDE,
+
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
 	// FB_FORMAT:
@@ -323,6 +329,8 @@ module emu
 		"-;",
 		"R0,Reset;",
 		"J1,A,B,C,P,X,R,L,T/Start,Coin;",
+		"jn,A,B,X,Start,Select,R,L,L2,R2;",
+		"jp,A,B,X,Start,Select,R,L,L2,R2;",
 		"V,v",`BUILD_DATE
 	};
 
