@@ -369,7 +369,11 @@ module ARM6_CORE
 					5'b10010,
 					5'b10011,
 					5'b10111,
-					5'b11011: CPSR_NEXT <= ALU_R;
+					5'b11011: begin
+						// MSR flags-only must preserve the CPSR control field.
+						if (EX_IC[16]) CPSR_NEXT <= ALU_R;
+						else CPSR_NEXT[31:28] <= ALU_R[31:28];
+					end
 					default: ;
 				endcase
 					
@@ -403,11 +407,11 @@ module ARM6_CORE
 			case (DECI.PSRCTL)
 				PSRC_ALU: if (EX_IC[22])
 					case (CPSR.M)
-						5'b10001: SPSR[1] <= ALU_R;
-						5'b10010: SPSR[2] <= ALU_R;
-						5'b10011: SPSR[3] <= ALU_R;
-						5'b10111: SPSR[4] <= ALU_R;
-						5'b11011: SPSR[5] <= ALU_R;
+						5'b10001: SPSR[1] <= EX_IC[16] ? ALU_R : {ALU_R[31:28], SPSR[1][27:0]};
+						5'b10010: SPSR[2] <= EX_IC[16] ? ALU_R : {ALU_R[31:28], SPSR[2][27:0]};
+						5'b10011: SPSR[3] <= EX_IC[16] ? ALU_R : {ALU_R[31:28], SPSR[3][27:0]};
+						5'b10111: SPSR[4] <= EX_IC[16] ? ALU_R : {ALU_R[31:28], SPSR[4][27:0]};
+						5'b11011: SPSR[5] <= EX_IC[16] ? ALU_R : {ALU_R[31:28], SPSR[5][27:0]};
 						default:;
 					endcase
 				

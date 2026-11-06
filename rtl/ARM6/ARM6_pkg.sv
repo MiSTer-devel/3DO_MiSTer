@@ -265,6 +265,11 @@ package ARM6_PKG;
 				DECI.LST = 1;
 			end
 			
+			12'b00110x10_xxxx: begin //MSR PSR_flg,#imm
+				if (IC[19:12] == 8'h8F) CYC = CYC_PSR_WRITE;
+				else DECI.ILI = 1;
+			end
+
 			12'b00010xxx_1001: begin //SWP{B} Rd,Rm,[Rn]
 				case (STATE)
 				5'd0: begin
@@ -509,7 +514,7 @@ package ARM6_PKG;
 			end
 				
 			CYC_PSR_WRITE: begin
-				DECI.DPCTL = {1'b0, 1'b0, IMM_DAT, IC[25] ? SHFT_ROT : IC[4] ? SHFT_REG : SHFT_CONST, MUL_NOP, 1'b0, 1'b1};
+				DECI.DPCTL = {1'b0, IC[25], IMM_U8, IC[25] ? SHFT_ROT : IC[4] ? SHFT_REG : SHFT_CONST, MUL_NOP, 1'b0, 1'b1};
 				DECI.ALU = {ALUT_B, 4'b0000};
 				DECI.RCTL = {4'd0, Rm, Rd, 1'b1, 1'b0, 1'b0, 1'b0, 1'b0};
 				DECI.PSRCTL = PSRC_ALU;
