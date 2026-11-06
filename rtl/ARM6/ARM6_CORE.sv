@@ -369,7 +369,11 @@ module ARM6_CORE
 					5'b10010,
 					5'b10011,
 					5'b10111,
-					5'b11011: CPSR_NEXT <= ALU_R;
+					5'b11011: begin
+						// MSR flags-only must preserve the CPSR control field.
+						if (EX_IC[16]) CPSR_NEXT <= ALU_R;
+						else CPSR_NEXT[31:28] <= ALU_R[31:28];
+					end
 					default: ;
 				endcase
 					
