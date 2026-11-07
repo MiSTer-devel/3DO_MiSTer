@@ -312,10 +312,10 @@ module emu
 		"P1O89,Vertical Crop,Disabled,216p(5x),224p;",
 	
 		"P2,Input;",
-		"P2O[34:32],Pad,1,2,3,4,Off;",
-		"D1P2O[35],Flightstick,Off,On;",
-		"D2P2O[36],Mouse,Off,On;",
-		"D3P2O[39],Arcade service,Off,On;",
+		"h3P2O[34:32],Pad,1,2,3,4,Off;",
+		"h3D1P2O[35],Flightstick,Off,On;",
+		"h3D2P2O[36],Mouse,Off,On;",
+		"H3P2O[39],Arcade service,Off,On;",
 		"P2-;",
 
 		"P3,Hardware;",

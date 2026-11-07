@@ -61,6 +61,18 @@ module HPS2PAD (
 			else mouse_step = axis[9:0];
 		end
 	endfunction
+
+	function automatic signed [9:0] trackball_step(input signed [7:0] axis);
+		reg [8:0] magnitude;
+		reg signed [9:0] step;
+		begin
+			magnitude = axis[7] ? -{axis[7],axis} : {1'b0,axis};
+			step = 0;
+			if (magnitude > 9'd16)
+				step = $signed({1'b0, (magnitude - 9'd16 + 9'd3) >> 2});
+			trackball_step = axis[7] ? -step : step;
+		end
+	endfunction
 	
 	//pad
 	wire [15:0] joy0_data = {1'b1, 2'b00, joystick_0[2], joystick_0[3], joystick_0[0], joystick_0[1], joystick_0[4], joystick_0[5], joystick_0[6], joystick_0[7], joystick_0[8], joystick_0[9], joystick_0[10], 2'b00};
@@ -116,6 +128,9 @@ module HPS2PAD (
 	reg signed [10:0] mouse_y_acc = '0;
 	wire signed [9:0] mouse_x = mouse_step(mouse_x_acc);
 	wire signed [9:0] mouse_y = mouse_step(mouse_y_acc);
+	wire mouse_event = ps2_mouse[24] != mouse_toggle;
+	reg signed [9:0] mouse_x_sent, mouse_y_sent;
+	bit LATCH;
 	always @(posedge CLK) begin
 		reg signed [11:0] x;
 		reg signed [11:0] y;
@@ -132,11 +147,11 @@ module HPS2PAD (
 			y = {mouse_y_acc[10],mouse_y_acc};
 
 			if (LATCH) begin
-				x = x - $signed({{2{mouse_x[9]}},mouse_x});
-				y = y - $signed({{2{mouse_y[9]}},mouse_y});
+				x = x - $signed({{2{mouse_x_sent[9]}},mouse_x_sent});
+				y = y - $signed({{2{mouse_y_sent[9]}},mouse_y_sent});
 			end
 
-			if (ps2_mouse[24] != mouse_toggle) begin
+			if (mouse_event) begin
 				mouse_toggle <= ps2_mouse[24];
 				mouse_left <= ps2_mouse[0];
 				mouse_middle <= ps2_mouse[2];
@@ -162,14 +177,18 @@ module HPS2PAD (
 	
 	//arcade control
 	wire [31:0] arcade_silli = {8'hC0, 8'h00, {1'b0, 1'b0, joystick_0[8], joystick_1[8], 1'b0, joystick_1[7], joystick_0[7], ARCADE_SERVICE}, 8'h00};
+	wire mouse_pending = (mouse_x_acc != 0) || (mouse_y_acc != 0) ||
+	                     (mouse_event && ((mouse_dx != 0) || (mouse_dy != 0)));
+	wire signed [9:0] trackball_x = mouse_pending ? mouse_x : trackball_step($signed(joy0_x0));
+	wire signed [9:0] trackball_y = mouse_pending ? mouse_y : trackball_step($signed(joy0_y0));
 	wire [31:0] arcade_tb = {
 		8'h49,
 		1'b0,
 		1'b0,
 		1'b0,
 		1'b0,
-		mouse_y[9:0],
-		mouse_x[9:0]
+		trackball_y,
+		trackball_x
 	};
 	
 	bit [255: 0] IN_DATA;
@@ -193,7 +212,6 @@ module HPS2PAD (
 			endcase
 	end
 
-	bit          LATCH;
 	always @(posedge CLK) begin
 		bit [  2: 0] STATE;
 		bit [255: 0] DIN,DOUT;
@@ -243,6 +261,9 @@ module HPS2PAD (
 							WAIT_CNT <= '1;
 							if (!PBCLK) begin
 								DOUT <= IN_DATA;
+								// Drain only the mouse motion captured in this packet.
+								mouse_x_sent <= mouse_x;
+								mouse_y_sent <= mouse_y;
 								LATCH <= 1'b1;
 //								BIT_CNT <= '0;
 								STATE <= 3'd4;
