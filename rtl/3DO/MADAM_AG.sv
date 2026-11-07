@@ -357,6 +357,24 @@ module MADAM_AG
 	
 	wire         CPU_RAM_SEL = CPU_DRAM0_SEL || CPU_DRAM1_SEL || CPU_VRAM_SEL;
 	
+	bit  [23: 0] DRAM0_END,DRAM1_START,DRAM1_END,VRAM_START,VRAM_END;
+	always_comb begin
+		case (MEM_SIZE[4:3])
+			2'b00: begin DRAM0_END = 24'h000000; DRAM1_START = 24'h000000; end
+			2'b01: begin DRAM0_END = 24'h0FFFFF; DRAM1_START = 24'h100000; end
+			2'b10: begin DRAM0_END = 24'h3FFFFF; DRAM1_START = 24'h400000; end
+			2'b11: begin DRAM0_END = 24'hDFFFFF; DRAM1_START = 24'hE00000; end
+		endcase
+		case (MEM_SIZE[6:5])
+			2'b00: begin DRAM1_END = DRAM1_START + 24'h000000; VRAM_START = DRAM1_START + 24'h000000; end
+			2'b01: begin DRAM1_END = DRAM1_START + 24'h0FFFFF; VRAM_START = DRAM1_START + 24'h100000; end
+			2'b10,
+			2'b11: begin DRAM1_END = DRAM1_START + 24'h3FFFFF; VRAM_START = DRAM1_START + 24'h400000; end
+		endcase
+		VRAM_END = VRAM_START + 24'h100000;
+	end
+	
+	
 	wire         AG_START =  (BUS_STATE_FF == EXTP_INIT1 || BUS_STATE_FF == EXTP_INIT3 || 
 	                          BUS_STATE_FF == PLAY_INIT1 || BUS_STATE_FF == PLAY_INIT3 || BUS_STATE_FF == REF_INIT1 ||
 									  BUS_STATE_FF == SCOB_INIT1 || BUS_STATE_FF == SCOB_NEXT_REL1 || BUS_STATE_FF == SCOB_SOURCE_REL1 || BUS_STATE_FF == SCOB_PIPPTR_REL1 || 
@@ -390,9 +408,9 @@ module MADAM_AG
 	wire [ 1: 0] AG_WE =  {2{BUS_STATE_FF == EXTP_WRITE0 || BUS_STATE_FF == EXTP_WRITE1}} | 
 	                      {2{BUS_STATE_FF == PLAY_WRITE0 || BUS_STATE_FF == PLAY_WRITE1}};
 	wire         AG_REF =  (BUS_STATE_FF == REF_INIT1 || BUS_STATE_FF == REF_WRITE0 || BUS_STATE_FF == REF_WRITE1 || BUS_STATE_FF == REF_WRITE2 || BUS_STATE_FF == REF_WRITE3);
-	wire         AG_DRAM0_SEL = ((AOUT >= (24'h000000>>2) && AOUT <= (24'h0FFFFF>>2)) || AG_REF) && MEM_SIZE[6:5] != 2'b00 && DRAM_EN;
-	wire         AG_DRAM1_SEL = ((AOUT >= (24'h100000>>2) && AOUT <= (24'h1FFFFF>>2)) || AG_REF) && MEM_SIZE[4:3] == 2'b01;
-	wire         AG_VRAM_SEL  = (AOUT >= (24'h200000>>2) && AOUT <= (24'h2FFFFF>>2));
+	wire         AG_DRAM0_SEL = ((AOUT >= (24'h000000>>2) && AOUT <= (DRAM0_END>>2)) || AG_REF) && |MEM_SIZE[4:3] && DRAM_EN;
+	wire         AG_DRAM1_SEL = ((AOUT >= (DRAM1_START>>2) && AOUT <= (DRAM1_END>>2)) || AG_REF) && |MEM_SIZE[6:5] && DRAM_EN;
+	wire         AG_VRAM_SEL  = (AOUT >= (VRAM_START>>2) && AOUT <= (VRAM_END>>2));
 	
 	wire         CFB_START = (BUS_STATE_FF == CFB_INIT1);
 	wire         CFB_ACCESS = (BUS_STATE_FF == CFB_INIT1 ||
@@ -401,9 +419,9 @@ module MADAM_AG
 	wire [ 1: 0] CFB_CAS = {SE_WRITE_A&~SE_ADDR_A[1]&PHASE1,SE_WRITE_A&SE_ADDR_A[1]&PHASE1}|{SE_WRITE_B&~SE_ADDR_B[1]&PHASE2,SE_WRITE_B&SE_ADDR_B[1]&PHASE2};
 	wire [ 1: 0] CFB_WE = {2{BUS_STATE_FF == CFB_WRITE0 || BUS_STATE_FF == CFB_WRITE1}}&CFB_CAS;
 	wire [ 1: 0] CFB_OE = {2{BUS_STATE_FF == CFB_READ0 || BUS_STATE_FF == CFB_READ1}}&CFB_CAS;
-	wire         CFB_DRAM0_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (24'h000000>>2) && SE_ADDR_B[23:2] <= (24'h0FFFFF>>2)) : (SE_ADDR_A[23:2] >= (24'h000000>>2) && SE_ADDR_A[23:2] <= (24'h0FFFFF>>2));
-	wire         CFB_DRAM1_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (24'h100000>>2) && SE_ADDR_B[23:2] <= (24'h1FFFFF>>2)) : (SE_ADDR_A[23:2] >= (24'h100000>>2) && SE_ADDR_A[23:2] <= (24'h1FFFFF>>2));
-	wire         CFB_VRAM_SEL  = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (24'h200000>>2) && SE_ADDR_B[23:2] <= (24'h2FFFFF>>2)) : (SE_ADDR_A[23:2] >= (24'h200000>>2) && SE_ADDR_A[23:2] <= (24'h2FFFFF>>2));
+	wire         CFB_DRAM0_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (24'h000000>>2) && SE_ADDR_B[23:2] <= (DRAM0_END>>2)) : (SE_ADDR_A[23:2] >= (24'h000000>>2) && SE_ADDR_A[23:2] <= (DRAM0_END>>2));
+	wire         CFB_DRAM1_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (DRAM1_START>>2) && SE_ADDR_B[23:2] <= (DRAM1_END>>2)) : (SE_ADDR_A[23:2] >= (DRAM1_START>>2) && SE_ADDR_A[23:2] <= (DRAM1_END>>2));
+	wire         CFB_VRAM_SEL  = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (VRAM_START>>2) && SE_ADDR_B[23:2] <= (VRAM_END>>2)) : (SE_ADDR_A[23:2] >= (VRAM_START>>2) && SE_ADDR_A[23:2] <= (VRAM_END>>2));
 	
 	wire         PREV_TRANS = (BUS_STATE_FF == CLUT_TRANSFER0 || BUS_STATE_FF == CLUT_TRANSFER1 || 
 	                           BUS_STATE_FF == VID_PREV0 || BUS_STATE_FF == VID_PREV1);

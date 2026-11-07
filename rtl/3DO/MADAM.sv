@@ -410,9 +410,25 @@ module MADAM
 			REG_DO <= '0;
 	end
 	
-	wire CPU_DRAM0_SEL = (A >= 32'h00000000 && A <= 32'h000FFFFF && MSYS[6:5] != 2'b00 && !BOOT_ROM);
-	wire CPU_DRAM1_SEL = (A >= 32'h00100000 && A <= 32'h001FFFFF && MSYS[4:3] == 2'b01 && !BOOT_ROM);
-	wire CPU_VRAM_SEL = (A >= 32'h00200000 && A <= 32'h002FFFFF);
+	bit  [23: 0] DRAM0_END,DRAM1_START,DRAM1_END,VRAM_START,VRAM_END;
+	always_comb begin
+		case (MSYS[4:3])
+			2'b00: begin DRAM0_END = 24'h000000; DRAM1_START = 24'h000000; end
+			2'b01: begin DRAM0_END = 24'h0FFFFF; DRAM1_START = 24'h100000; end
+			2'b10: begin DRAM0_END = 24'h3FFFFF; DRAM1_START = 24'h400000; end
+			2'b11: begin DRAM0_END = 24'hDFFFFF; DRAM1_START = 24'hE00000; end//??
+		endcase
+		case (MSYS[6:5])
+			2'b00: begin DRAM1_END = DRAM1_START + 24'h000000; VRAM_START = DRAM1_START + 24'h000000; end
+			2'b01: begin DRAM1_END = DRAM1_START + 24'h0FFFFF; VRAM_START = DRAM1_START + 24'h100000; end
+			2'b10,
+			2'b11: begin DRAM1_END = DRAM1_START + 24'h3FFFFF; VRAM_START = DRAM1_START + 24'h400000; end
+		endcase
+		VRAM_END = VRAM_START + 24'h100000;
+	end
+	wire CPU_DRAM0_SEL = (A[31:24] == 8'h00 && A[23:0] >= 32'h00000000 && A[23:0] <= DRAM0_END && |MSYS[4:3] && !BOOT_ROM);
+	wire CPU_DRAM1_SEL = (A[31:24] == 8'h00 && A[23:0] >= DRAM1_START  && A[23:0] <= DRAM1_END && |MSYS[6:5] && !BOOT_ROM);
+	wire CPU_VRAM_SEL  = (A[31:24] == 8'h00 && A[23:0] >= VRAM_START   && A[23:0] <= VRAM_END              );
 	wire CPU_CLIO_SEL = (A[31:20] == 12'h034);
 	wire CPU_SLOW_SEL = (A[31:20] == 12'h030 || A[31:20] == 12'h031 || (A[31:20] == 12'h000 && BOOT_ROM));
 	wire CPU_SPORT_SEL = (A[31:20] == 12'h032 && CPU_GRANT);

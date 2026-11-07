@@ -291,7 +291,7 @@ module emu
 	// 0         1         2         3          4         5         6   
 	// 01234567890123456789012345678901 23456789012345678901234567890123
 	// 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-	// X     XXXX  XXXXXXXX             XXXXXXXX                        
+	// X     XXXX  XXXXXXXXXX           XXXXXXXX                        
 	
 	`include "build_id.v"
 	localparam CONF_STR = {
@@ -321,6 +321,7 @@ module emu
 
 		"P3,Hardware;",
 		"P3OJ,Video mode,240p,480i(original);",
+		"P3OKL,Sysmem (DRAM+VRAM),2MB+1MB,4MB+1MB,8MB+1MB;",
 
 		"P4,Debug;",
 		"P4OH,H Interpolation,Off,On;",
@@ -836,6 +837,13 @@ module emu
 	);
 	
 	
+	reg          sdram_init;
+	reg  [ 1: 0] sysmem_mode;
+	always @(posedge clk_mem) begin
+		sdram_init <= status[0];
+		sysmem_mode <= status[21:20];
+	end
+	
 	wire [31:0] sdr_dout;
 	sdram sdram1
 	(
@@ -852,17 +860,17 @@ module emu
 		.SDRAM_CKE(SDRAM_CKE),
 		
 		.clk(clk_mem),
-		.init(status[0]),
+		.init(sdram_init),
 		.sync(MCLK_CE),
 	
-		.laddr({2'b00,~LRAS3_N,LA[19:2]}),
+		.laddr(sysmem_mode == 2'b10 ? {~LRAS3_N,LA[21:2]} : sysmem_mode == 2'b01 ? {1'b0,LA[21:2]} : {2'b00,~LRAS3_N,LA[19:2]}),
 		.lwe  (~LWE_N),
-		.lras(!LRAS2_N || !LRAS3_N),
+		.lras(sysmem_mode == 2'b01 ? !LRAS2_N : !LRAS2_N || !LRAS3_N),
 		.lcode(LCODE),
 		
-		.raddr({2'b00,~RRAS3_N,RA[19:2]}),
+		.raddr(sysmem_mode == 2'b10 ? {~RRAS3_N,RA[21:2]} : sysmem_mode == 2'b01 ? {1'b0,RA[21:2]} : {2'b00,~RRAS3_N,RA[19:2]}),
 		.rwe  (~RWE_N),
-		.rras(!RRAS2_N || !RRAS3_N),
+		.rras(sysmem_mode == 2'b01 ? !RRAS2_N : !RRAS2_N || !RRAS3_N),
 		.rcode(RCODE),
 		
 		.din  (RAM_DO),
