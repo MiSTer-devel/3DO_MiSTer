@@ -1266,19 +1266,24 @@ module CLIO
 //	bit          EIFIFO_RDREQ[13];
 	bit  [15: 0] EIFIFO_Q[13];
 	bit  [ 3: 0] EIFIFO_COUNT[13];
-	CLIO_DSP_FIFO EIFIFO0  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 0]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 0] & IO_EN & CE_R), .RDREQ(EIFIFO0_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 0]), .COUNT(EIFIFO_COUNT[ 0]));
-	CLIO_DSP_FIFO EIFIFO1  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 1]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 1] & IO_EN & CE_R), .RDREQ(EIFIFO1_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 1]), .COUNT(EIFIFO_COUNT[ 1]));
-	CLIO_DSP_FIFO EIFIFO2  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 2]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 2] & IO_EN & CE_R), .RDREQ(EIFIFO2_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 2]), .COUNT(EIFIFO_COUNT[ 2]));
-	CLIO_DSP_FIFO EIFIFO3  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 3]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 3] & IO_EN & CE_R), .RDREQ(EIFIFO3_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 3]), .COUNT(EIFIFO_COUNT[ 3]));
-	CLIO_DSP_FIFO EIFIFO4  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 4]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 4] & IO_EN & CE_R), .RDREQ(EIFIFO4_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 4]), .COUNT(EIFIFO_COUNT[ 4]));
-	CLIO_DSP_FIFO EIFIFO5  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 5]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 5] & IO_EN & CE_R), .RDREQ(EIFIFO5_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 5]), .COUNT(EIFIFO_COUNT[ 5]));
-	CLIO_DSP_FIFO EIFIFO6  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 6]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 6] & IO_EN & CE_R), .RDREQ(EIFIFO6_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 6]), .COUNT(EIFIFO_COUNT[ 6]));
-	CLIO_DSP_FIFO EIFIFO7  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 7]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 7] & IO_EN & CE_R), .RDREQ(EIFIFO7_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 7]), .COUNT(EIFIFO_COUNT[ 7]));
-	CLIO_DSP_FIFO EIFIFO8  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 8]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 8] & IO_EN & CE_R), .RDREQ(EIFIFO8_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 8]), .COUNT(EIFIFO_COUNT[ 8]));
-	CLIO_DSP_FIFO EIFIFO9  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 9]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 9] & IO_EN & CE_R), .RDREQ(EIFIFO9_OE  & DSP_EN & CE_R), .Q(EIFIFO_Q[ 9]), .COUNT(EIFIFO_COUNT[ 9]));
-	CLIO_DSP_FIFO EIFIFO10 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[10]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[10] & IO_EN & CE_R), .RDREQ(EIFIFO10_OE & DSP_EN & CE_R), .Q(EIFIFO_Q[10]), .COUNT(EIFIFO_COUNT[10]));
-	CLIO_DSP_FIFO EIFIFO11 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[11]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[11] & IO_EN & CE_R), .RDREQ(EIFIFO11_OE & DSP_EN & CE_R), .Q(EIFIFO_Q[11]), .COUNT(EIFIFO_COUNT[11]));
-	CLIO_DSP_FIFO EIFIFO12 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[12]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[12] & IO_EN & CE_R), .RDREQ(EIFIFO12_OE & DSP_EN & CE_R), .Q(EIFIFO_Q[12]), .COUNT(EIFIFO_COUNT[12]));
+	//A value the CPU wrote to 0x070+n is returned by the next DSP read of channel n instead of the
+	//FIFO, which does not move then (Opera: CPUSupply). Popping there dropped the head word: the
+	//audio folio supplies a value before starting a stream, and the stream's first word (the header
+	//of Psychic Detective's first sound) was lost, so its decoder saturated for a whole block.
+	bit          EIFIFO_CPU[13];
+	CLIO_DSP_FIFO EIFIFO0  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 0]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 0] & IO_EN & CE_R), .RDREQ(EIFIFO0_OE & DSP_EN & CE_R & !EIFIFO_CPU[0]), .Q(EIFIFO_Q[ 0]), .COUNT(EIFIFO_COUNT[ 0]));
+	CLIO_DSP_FIFO EIFIFO1  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 1]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 1] & IO_EN & CE_R), .RDREQ(EIFIFO1_OE & DSP_EN & CE_R & !EIFIFO_CPU[1]), .Q(EIFIFO_Q[ 1]), .COUNT(EIFIFO_COUNT[ 1]));
+	CLIO_DSP_FIFO EIFIFO2  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 2]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 2] & IO_EN & CE_R), .RDREQ(EIFIFO2_OE & DSP_EN & CE_R & !EIFIFO_CPU[2]), .Q(EIFIFO_Q[ 2]), .COUNT(EIFIFO_COUNT[ 2]));
+	CLIO_DSP_FIFO EIFIFO3  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 3]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 3] & IO_EN & CE_R), .RDREQ(EIFIFO3_OE & DSP_EN & CE_R & !EIFIFO_CPU[3]), .Q(EIFIFO_Q[ 3]), .COUNT(EIFIFO_COUNT[ 3]));
+	CLIO_DSP_FIFO EIFIFO4  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 4]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 4] & IO_EN & CE_R), .RDREQ(EIFIFO4_OE & DSP_EN & CE_R & !EIFIFO_CPU[4]), .Q(EIFIFO_Q[ 4]), .COUNT(EIFIFO_COUNT[ 4]));
+	CLIO_DSP_FIFO EIFIFO5  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 5]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 5] & IO_EN & CE_R), .RDREQ(EIFIFO5_OE & DSP_EN & CE_R & !EIFIFO_CPU[5]), .Q(EIFIFO_Q[ 5]), .COUNT(EIFIFO_COUNT[ 5]));
+	CLIO_DSP_FIFO EIFIFO6  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 6]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 6] & IO_EN & CE_R), .RDREQ(EIFIFO6_OE & DSP_EN & CE_R & !EIFIFO_CPU[6]), .Q(EIFIFO_Q[ 6]), .COUNT(EIFIFO_COUNT[ 6]));
+	CLIO_DSP_FIFO EIFIFO7  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 7]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 7] & IO_EN & CE_R), .RDREQ(EIFIFO7_OE & DSP_EN & CE_R & !EIFIFO_CPU[7]), .Q(EIFIFO_Q[ 7]), .COUNT(EIFIFO_COUNT[ 7]));
+	CLIO_DSP_FIFO EIFIFO8  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 8]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 8] & IO_EN & CE_R), .RDREQ(EIFIFO8_OE & DSP_EN & CE_R & !EIFIFO_CPU[8]), .Q(EIFIFO_Q[ 8]), .COUNT(EIFIFO_COUNT[ 8]));
+	CLIO_DSP_FIFO EIFIFO9  (.CLK(CLK), .EN(EN), .RST(FIFOINIT[ 9]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[ 9] & IO_EN & CE_R), .RDREQ(EIFIFO9_OE & DSP_EN & CE_R & !EIFIFO_CPU[9]), .Q(EIFIFO_Q[ 9]), .COUNT(EIFIFO_COUNT[ 9]));
+	CLIO_DSP_FIFO EIFIFO10 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[10]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[10] & IO_EN & CE_R), .RDREQ(EIFIFO10_OE & DSP_EN & CE_R & !EIFIFO_CPU[10]), .Q(EIFIFO_Q[10]), .COUNT(EIFIFO_COUNT[10]));
+	CLIO_DSP_FIFO EIFIFO11 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[11]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[11] & IO_EN & CE_R), .RDREQ(EIFIFO11_OE & DSP_EN & CE_R & !EIFIFO_CPU[11]), .Q(EIFIFO_Q[11]), .COUNT(EIFIFO_COUNT[11]));
+	CLIO_DSP_FIFO EIFIFO12 (.CLK(CLK), .EN(EN), .RST(FIFOINIT[12]), .DATA(EIFIFO_DATA), .WRREQ(EIFIFO_WRREQ[12] & IO_EN & CE_R), .RDREQ(EIFIFO12_OE & DSP_EN & CE_R & !EIFIFO_CPU[12]), .Q(EIFIFO_Q[12]), .COUNT(EIFIFO_COUNT[12]));
 	wire [ 3: 0] EIFIFO_STAT[15] = '{{EIFIFO_COUNT[0]},
 	                                 {EIFIFO_COUNT[1]},
 												{EIFIFO_COUNT[2]},
@@ -1319,13 +1324,24 @@ module CLIO
 	bit          EIFIFO_OE_LATCH[13];
 	bit          EOFIFO_WE_LATCH[4];
 	wire EIFIFO_BUF_WE = (DSP_ADDR[7:0] >= 9'h070 && DSP_ADDR[7:0] <= 9'h07E && DSP_EIRAM_WE);//0x070-0x07E
-	bit  [15: 0] EIFIFO_BUF[13];
+	//A DSP read of an input FIFO (bump 0x0F0-0x0FC, read 0x070-0x07C) returns the current head,
+	//EIFIFO_Q, read in the DSP cycle itself. It used to return EIFIFO_BUF loaded by the previous
+	//read, i.e. the sample before the head: instruments that bump the left then the right sample of
+	//a stereo frame (the BIOS audio CD player's fixedstereo16swap.dsp) got their channels swapped.
+	//The head must not be copied between the DSP cycles: the FIFO is an MLAB written in the cycle
+	//after the CE_R edge that registers the write, so a copy taken then can catch the old content of
+	//the slot being written when the FIFO was empty (a sample one lap old: a crackle on hardware,
+	//invisible in simulation). In the DSP cycle the MLAB is stable.
+	//A read of an empty FIFO returns 0 and does not pop: the head slot of an empty FIFO holds a word
+	//one lap old. Opera returns 0 for a channel without data.
+	bit  [15: 0] EIFIFO_BUF[13];	//the value written by the CPU (EIFIFO_CPU)
 //	bit          EIFIFO_BUF_EMPTY[13];
 	always @(posedge CLK or negedge RST_N) begin
 		if (!RST_N) begin
 			EIFIFO_OE_LATCH <= '{13{0}};
 			EOFIFO_WE_LATCH <= '{4{0}};
 			EIFIFO_BUF <= '{13{'0}};
+			EIFIFO_CPU <= '{13{0}};
 //			EIFIFO_BUF_EMPTY <= '{13{0}};
 		end
 		else if (EN && CE_R) begin
@@ -1349,13 +1365,14 @@ module CLIO
 				EOFIFO_WE_LATCH[ 3] <= EOFIFO3_WE;
 				
 				if ((EIFIFO_OE || EIFIFO_OE2) && DSP_EI_OE) begin
-					EIFIFO_BUF[DSP_EI_ADDR[3:0]] <= EIFIFO_Q[DSP_EI_ADDR[3:0]];
+					EIFIFO_CPU[DSP_EI_ADDR[3:0]] <= 0;
 //					EIFIFO_BUF_EMPTY[DSP_EI_ADDR[3:0]] <= 1;
 				end
 			end
 			if (IO_EN) begin
 				if (EIFIFO_BUF_WE) begin
 					EIFIFO_BUF[DSP_ADDR[3:0]] <= DSP_DI;
+					EIFIFO_CPU[DSP_ADDR[3:0]] <= 1;
 //					EIFIFO_BUF_EMPTY[DSP_ADDR[3:0]] <= 0;
 				end
 			end
@@ -1423,7 +1440,7 @@ module CLIO
 	assign DSP_EI_DATA = EIRAM_OE ? EIRAM_DATA : 
 						      EIFIFO_STAT_OE ? {12'b0000_0000_0000,EIFIFO_STAT[DSP_EI_ADDR[3:0]]} :
 						      EOFIFO_STAT_OE ? {12'b0000_0000_0000,EOFIFO_STAT[DSP_EI_ADDR[1:0]]} :
-						      EIFIFO_OE || EIFIFO_OE2 ? EIFIFO_BUF[DSP_EI_ADDR[3:0]] :
+						      EIFIFO_OE || EIFIFO_OE2 ? (EIFIFO_CPU[DSP_EI_ADDR[3:0]] ? EIFIFO_BUF[DSP_EI_ADDR[3:0]] : EIFIFO_COUNT[DSP_EI_ADDR[3:0]] == 4'd0 ? 16'h0000 : EIFIFO_Q[DSP_EI_ADDR[3:0]]) :
 								NOISE_OE ? NOISE[15:0] :
 						      AUDLOCK_OE ? {AUDLOCK,15'b000_0000_0000_0000} :
 						      SEMASTAT_OE ? {12'b0000_0000_0000,DSP_SEMAPHORE_STAT} :

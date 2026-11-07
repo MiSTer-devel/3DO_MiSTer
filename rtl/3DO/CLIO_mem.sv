@@ -364,10 +364,13 @@ module CLIO_DSP_FIFO (
 			if (RDREQ && AMOUNT) begin
 				RADDR <= RADDR + 3'd1;
 			end
-			
-			if (WRREQ && !RDREQ && !AMOUNT[3]) begin
+
+			//Count what was actually written and popped: a read of an empty FIFO pops nothing and a
+			//write to a full one is dropped, so a write and a read in the same cycle change the count
+			//when the FIFO is empty or full (it used to stay the same, one off from the pointers)
+			if ((WRREQ && !AMOUNT[3]) && !(RDREQ && AMOUNT)) begin
 				AMOUNT <= AMOUNT + 4'd1;
-			end else if (!WRREQ && RDREQ && AMOUNT) begin
+			end else if (!(WRREQ && !AMOUNT[3]) && (RDREQ && AMOUNT)) begin
 				AMOUNT <= AMOUNT - 4'd1;
 			end
 		end
