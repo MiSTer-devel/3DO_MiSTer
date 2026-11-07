@@ -312,11 +312,10 @@ module emu
 		"P1O89,Vertical Crop,Disabled,216p(5x),224p;",
 	
 		"P2,Input;",
-		"P2O[34:32],Pad,1,2,3,4,Off;",
-		"D1P2O[35],Flightstick,Off,On;",
-		"D2P2O[36],Mouse,Off,On;",
-		"P2O[38:37],Arcade control,Off,Trackball;",/*,LightGun*/
-		"P2O[39],Arcade service,Off,On;",
+		"h3P2O[34:32],Pad,1,2,3,4,Off;",
+		"h3D1P2O[35],Flightstick,Off,On;",
+		"h3D2P2O[36],Mouse,Off,On;",
+		"H3P2O[39],Arcade service,Off,On;",
 		"P2-;",
 
 		"P3,Hardware;",
@@ -329,14 +328,14 @@ module emu
 		
 		"-;",
 		"R0,Reset;",
-		"J1,A,B,C,P,X,R,L,T/Start,Coin;",
-		"jn,A,B,X,Start,Select,R,L,L2,R2;",
-		"jp,A,B,X,Start,Select,R,L,L2,R2;",
+		"J1,A,B,C,Play/Start,Stop/Coin,R,L,Trigger(Flightstick);",
+		"jn,A,B,X,Start,Select,R,L,L2;",
+		"jp,A,B,X,Start,Select,R,L,L2;",
 		"V,v",`BUILD_DATE
 	};
 
 	wire [63:0] status;
-	wire [15:0] status_menumask = {13'd0,mouse_mask,stick_mask,~bk_ena};
+	wire [15:0] status_menumask = {12'd0,~arcade_sel,mouse_mask,stick_mask,~bk_ena};
 	
 	wire  [1:0] buttons;
 	wire [15:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -537,9 +536,16 @@ module emu
 	reg  [ 3: 0] BRAM2_OFFS;//Block 0x20000
 	reg  [ 3: 0] BRAM1_OFFS;//Block 0x10000
 	reg          NEED_DSP_PAUSE;
+	reg          arcade_sel = 0;
+	localparam [31:0] ORBATAK_DISC_ID = 32'h165425BD;
 	always @(posedge clk_sys) begin
 		reg [31: 0] msf,id;
-	
+
+		// Main starts disc changes and ejects by unmounting the save on index 4.
+		if (RESET || save_download) arcade_sel <= 0;
+		else if (cdd_info_download && ioctl_wr && ioctl_addr == 25'h7FE)
+			arcade_sel <= (id == ORBATAK_DISC_ID);
+
 		if (cdd_info_download && ioctl_wr) begin
 			if (ioctl_addr == 25'h004) begin
 				msf[31:16] <= {ioctl_data[7:0],ioctl_data[15:8]};
@@ -797,7 +803,6 @@ module emu
 	
 	
 	wire [2:0] pad_sel = status[34:32] >= 3'd4 ? 3'd0 : status[34:32] + 3'd1;
-	wire [1:0] arcade_sel = status[38:37];
 	wire stick_mask = ~(pad_sel <= 3'd1 && !arcade_sel);
 	wire mouse_mask = ~(pad_sel <= 3'd2 && !arcade_sel);
 	
@@ -816,15 +821,15 @@ module emu
 		.EXPBDOUT(),
 	
 		.PAD_SEL(pad_sel),
-		.ARCADE_SEL(arcade_sel),
+		.ARCADE_SEL({1'b0,arcade_sel}),
 		.STICK_EN(status[35]&~stick_mask),
-		.MOUSE_EN(status[36]&~mouse_mask),
+		.MOUSE_EN(arcade_sel | (status[36]&~mouse_mask)),
 		.ARCADE_SERVICE(status[39]),
 	
-		.joystick_0(joystick_0[12:0]),
-		.joystick_1(joystick_1[12:0]),
-		.joystick_2(joystick_2[12:0]),
-		.joystick_3(joystick_3[12:0]),
+		.joystick_0(joystick_0[11:0]),
+		.joystick_1(joystick_1[11:0]),
+		.joystick_2(joystick_2[11:0]),
+		.joystick_3(joystick_3[11:0]),
 		.joy0_x0(joy0_x0),
 		.joy0_y0(joy0_y0),
 		.joy0_x1(joy0_x1),
