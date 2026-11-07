@@ -63,7 +63,7 @@ module ARM6_CORE
 		
 	bit  [31: 0] ALU_A;
 	bit  [31: 0] ALU_B;
-	bit          ALU_SHC;
+	bit          ALU_SHC,ALU_SHZ;
 	bit  [31: 0] ALU_R;
 	bit          ALU_N;
 	bit          ALU_Z;
@@ -207,7 +207,7 @@ module ARM6_CORE
 	
 	bit  [31: 0] PSR_RES;
 	bit  [31: 0] SHIFT_RES;
-	bit          SHIFT_C;
+	bit          SHIFT_C,SHIFT_ZERO;
 	bit  [31: 0] MUL_RES;
 	always_comb begin
 		bit [31: 0] MD;
@@ -249,11 +249,11 @@ module ARM6_CORE
 		
 		SHIFT_A = DECI.DPCTL.SB ? IMM : RB_RBQ;
 		case (DECI.DPCTL.SHCTL)
-			SHFT_NONE:  begin SHIFT_SA = '0;                        SHIFT_TYPE = 3'b000; end
-			SHFT_CONST: begin SHIFT_SA = {3'b000,EX_IC[11:7]};      SHIFT_TYPE = {1'b1,EX_IC[6:5]}; end
-			SHFT_REG:   begin SHIFT_SA = SHIFT_LATCH;               SHIFT_TYPE = {1'b0,EX_IC[6:5]}; end
-			SHFT_ROT:   begin SHIFT_SA = {3'b000,EX_IC[11:8],1'b0}; SHIFT_TYPE = 3'b011; end
-			SHFT_LSL2:  begin SHIFT_SA = 8'd2;                      SHIFT_TYPE = 3'b000; end
+			SHFT_NONE:  begin SHIFT_SA = '0;                                             SHIFT_TYPE = 3'b000;            SHIFT_ZERO = 1; end
+			SHFT_CONST: begin SHIFT_SA = {2'b00,(EX_IC[11:5]==7'b00000_10),EX_IC[11:7]}; SHIFT_TYPE = {1'b1,EX_IC[6:5]}; SHIFT_ZERO = ~|EX_IC[11:7] & ~|EX_IC[6:5]; end
+			SHFT_REG:   begin SHIFT_SA = SHIFT_LATCH;                                    SHIFT_TYPE = {1'b0,EX_IC[6:5]}; SHIFT_ZERO = ~|SHIFT_LATCH; end
+			SHFT_ROT:   begin SHIFT_SA = {3'b000,EX_IC[11:8],1'b0};                      SHIFT_TYPE = 3'b011;            SHIFT_ZERO = ~|EX_IC[11:8]; end
+			SHFT_LSL2:  begin SHIFT_SA = 8'd2;                                           SHIFT_TYPE = 3'b000;            SHIFT_ZERO = 0; end
 		endcase
 		
 		{SHIFT_C,SHIFT_RES} = Shifter(SHIFT_A, SHIFT_SA, SHIFT_TYPE, CPSR.C);
@@ -266,12 +266,14 @@ module ARM6_CORE
 			ALU_A <= '0;
 			ALU_B <= '0;
 			ALU_SHC <= 0;
+			ALU_SHZ <= 0;
 		end
 		else if (EN && CE_R) begin
 			if (DECI.DPCTL.ALULTCH) begin
 				ALU_A <= DECI.DPCTL.SA ? PSR_RES : RB_RAQ; 
 				ALU_B <= DECI.DPCTL.MCTL == MUL_EXE ? MUL_RES : SHIFT_RES; 
 				ALU_SHC <= SHIFT_C; 
+				ALU_SHZ <= SHIFT_ZERO; 
 			end
 		end
 	end 
@@ -285,6 +287,7 @@ module ARM6_CORE
 		bit [31:0] LOG_RES; 
 		bit        LOG_Z;
 		bit        LOG_V;
+		bit        LOG_C;
 		
 		{ADD_C,ADD_RES} = Adder(ALU_A, ALU_B, CPSR.C, DECI.ALU.CD); 
 		{ADD_A_SIGN,ADD_B_SIGN,ADD_R_SIGN} = !DECI.ALU.CD[1] ? {ALU_A[31],ALU_B[31],ADD_RES[31]} : {ALU_B[31],ALU_A[31],ADD_RES[31]};
@@ -295,10 +298,11 @@ module ARM6_CORE
 		LOG_RES = Log(ALU_A, ALU_B, DECI.ALU.CD); 
 		LOG_Z = ~|LOG_RES;
 		LOG_V = CPSR.V;
+		LOG_C = ALU_SHZ ? CPSR.C : ALU_SHC;
 		
 		case (DECI.ALU.OP)
 			ALUT_ADD: {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {ADD_RES[31],ADD_Z ,ADD_C  ,ADD_V ,ADD_RES};
-			ALUT_LOG: {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {LOG_RES[31],LOG_Z ,ALU_SHC,LOG_V ,LOG_RES};
+			ALUT_LOG: {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {LOG_RES[31],LOG_Z ,LOG_C  ,LOG_V ,LOG_RES};
 			ALUT_MUL: {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {ADD_RES[31],ADD_Z ,CPSR.C ,CPSR.V,ADD_RES};
 			ALUT_A:   {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {CPSR.N     ,CPSR.Z,CPSR.C ,CPSR.V,ALU_A};
 			default:  {ALU_N,ALU_Z,ALU_C,ALU_V,ALU_R} = {CPSR.N     ,CPSR.Z,CPSR.C ,CPSR.V,ALU_B};
@@ -364,12 +368,17 @@ module ARM6_CORE
 		case (DECI.PSRCTL)
 			PSRC_ALU: if (!EX_IC[22]) 
 				case (CPSR.M)
-					5'b10000: CPSR_NEXT[31:28] <= ALU_R[31:28];
+					5'b10000: CPSR_NEXT[31:24] <= ALU_R[31:24];
 					5'b10001,
 					5'b10010,
 					5'b10011,
 					5'b10111,
-					5'b11011: CPSR_NEXT <= ALU_R;
+					5'b11011: begin
+						if (EX_IC[19]) CPSR_NEXT[31:24] <= ALU_R[31:24];
+						if (EX_IC[18]) CPSR_NEXT[23:16] <= ALU_R[23:16];
+						if (EX_IC[17]) CPSR_NEXT[15: 8] <= ALU_R[15: 8];
+						if (EX_IC[16]) CPSR_NEXT[ 7: 0] <= ALU_R[ 7: 0];
+					end
 					default: ;
 				endcase
 					
