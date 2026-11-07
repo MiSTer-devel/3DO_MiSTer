@@ -197,18 +197,10 @@ module CLIO
 	//RandSeed (0x38) and RandSample (0x3C). The kernel's ReadHardwareRandomNumber reads RandSample
 	//twice and combines the values, and software can loop until it gets the numbers it wants (the
 	//BIOS audio CD player builds a track permutation that way at start), so RandSample must change
-	//between reads. The hardware samples a video noise source (not documented): a free-running
-	//32-bit maximal LFSR (x^32+x^22+x^2+x+1) stepped every clock stands in for it.
+	//between reads. How the hardware makes it is not documented: a 32-bit maximal LFSR
+	//(x^32+x^22+x^2+x+1) steps on each read, as Opera returns a new pseudo-random value on each read.
 	bit  [31: 0] RAND_SEED;
 	bit  [31: 0] RAND_LFSR;
-	always @(posedge CLK or negedge RST_N) begin
-		if (!RST_N) begin
-			RAND_LFSR <= 32'h00000001;
-		end
-		else begin
-			RAND_LFSR <= {RAND_LFSR[30:0], RAND_LFSR[31] ^ RAND_LFSR[21] ^ RAND_LFSR[1] ^ RAND_LFSR[0]};
-		end
-	end
 	
 	bit          INFO_CODE;
 	always @(posedge CLK or negedge RST_N) begin
@@ -237,6 +229,7 @@ module CLIO
 			UNCLE_BITS <= '0;
 			{ADBIO_D,ADBIO_O} <= '0;
 			RAND_SEED <= '0;
+			RAND_LFSR <= 32'h00000001;
 			
 			IO_ST <= IO_IDLE;
 			IO_XBUS_RD <= 0;
@@ -483,6 +476,9 @@ module CLIO
 							end
 						end
 						else if (CLC == 3'h3 && !INFO_CODE /*&& MCLK_PH1*/) begin	//CPU read
+							if (CONTROL_SEL && A[5:2] == 4'hF) begin	//RandSample: a new value after each read
+								RAND_LFSR <= {RAND_LFSR[30:0], RAND_LFSR[31] ^ RAND_LFSR[21] ^ RAND_LFSR[1] ^ RAND_LFSR[0]};
+							end
 							if (A == (16'h0000>>2)) begin
 								IO_ST <= IO_IDLE;
 							end
