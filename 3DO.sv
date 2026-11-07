@@ -963,6 +963,7 @@ module emu
 	
 	wire [15: 0] ddr_nvram_do;
 	wire         ddr_nvram_busy;
+	wire [15: 0] nvram_load_data;
 	
 	wire [31: 0] ddr_do;
 	wire         ddr_busy;
@@ -993,7 +994,7 @@ module emu
 		.io_busy(ddr_io_busy),
 		
 		.nvram_addr({sd_lba[5:0],tmpram_addr}),
-		.nvram_din ({tmpram_dout[7:0],tmpram_dout[15:8]}),
+		.nvram_din (nvram_load_data),
 		.nvram_wr  (tmpram_req & bk_loading),
 		.nvram_rd  (tmpram_req & ~bk_loading),
 		.nvram_dout(ddr_nvram_do),
@@ -1189,6 +1190,20 @@ module emu
 	end
 
 	assign sd_buff_din = tmpram_sd_buff_q; 
+
+	//A save file without a volume label is loaded as a blank formatted NVRAM
+	P3DO_NVRAM_FMT nvram_fmt
+	(
+		.CLK(clk_sys),
+		.LOAD(bk_loading),
+		.SD_WR(sd_buff_wr & sd_ack),
+		.SD_ADDR(sd_buff_addr),
+		.SD_DATA(sd_buff_dout),
+		.SECTOR(sd_lba[5:0]),
+		.ADDR(tmpram_addr),
+		.DIN({tmpram_dout[7:0],tmpram_dout[15:8]}),
+		.DOUT(nvram_load_data)
+	);
 	
 
 	////////////////////////////////////////////////////////////////

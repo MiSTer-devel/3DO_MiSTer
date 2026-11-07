@@ -10,6 +10,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/hps2pad.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/nvram_fmt.sv
 set_global_assignment -name QIP_FILE rtl/pll2.qip
 set_global_assignment -name SDC_FILE 3DO.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE 3DO.sv
