@@ -296,7 +296,7 @@ module emu
 	`include "build_id.v"
 	localparam CONF_STR = {
 		"3DO;;",
-		"S0,CUEISO,Insert Disk;",
+		"S0,CUEISOCHD,Insert Disk;",
 		"FS2,BIN,Load bios;",
 		"-;",
 		"OFG,Region,BIOS,NTSC,PAL;",
