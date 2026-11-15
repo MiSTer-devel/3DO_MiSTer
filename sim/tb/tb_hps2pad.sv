@@ -108,19 +108,31 @@ module tb_hps2pad;
 		end
 	endtask
 
+	// Reference pixel for an aim: Main_MiSTer gives the calibrated screen as
+	// -127..+127 (-128 only as a clamp), the screen is the VE window, framebuffer
+	// pixels 0..319 x 0..239 in NTSC and PAL; nearest pixel, -127 the first,
+	// +127 the last
+	function automatic integer ref_px(input integer a, input integer last);
+		real t;
+		begin
+			if (a < -127) a = -127;
+			t = (a + 127) * last / 254.0;
+			ref_px = $rtoi(t + 0.5);
+		end
+	endfunction
+
 	// Reference: the count Portfolio's light gun driver decodes back to the pixel
-	// (lightgun.h scan constants), division by 10 rounded up
-	function automatic [19:0] ref_counter(input integer ux, input integer uy);
-		integer w, h, xs, ys, off, x, y, c;
+	// (lightgun.h scan constants), both divisions rounded up
+	function automatic [19:0] ref_counter(input integer ax, input integer ay);
+		integer w, xs, ys, off, x, y, c;
 		begin
 			w   = GUN_PAL ? 388 : 320;
-			h   = GUN_PAL ? 288 : 240;
 			xs  = GUN_PAL ? 1051 : 1030;
 			ys  = GUN_PAL ? 12796 : 12707;
 			off = GUN_PAL ? 58995 : 12835;
-			x = (ux * w) / 256;
-			y = (uy * h) / 256;
-			c = ((y * ys) + ((x * xs * 10) / w) + 9) / 10;
+			x = ref_px(ax, 319);
+			y = ref_px(ay, 239);
+			c = ((y * ys) + ((x * xs * 10 + w - 1) / w) + 9) / 10;
 			ref_counter = (c + off) & 20'hFFFFF;
 		end
 	endfunction
@@ -139,9 +151,32 @@ module tb_hps2pad;
 		end
 	endtask
 
-	function automatic [7:0] to_axis(input integer u);
-		to_axis = u - 128;
+	function automatic [7:0] to_axis(input integer a);
+		to_axis = a;
 	endfunction
+
+	// the aim settles, then the pixel the driver decodes from the count
+	task automatic aim_decode(input integer ax, input integer ay, output integer x, output integer y);
+		begin
+			joy0_x0 = to_axis(ax);
+			joy0_y0 = to_axis(ay);
+			repeat (130) @(posedge CLK);
+			#1;
+			decode(dut.lg_count, x, y);
+		end
+	endtask
+
+	task automatic check_pixel(input integer ax, input integer ay, input integer ex, input integer ey, input [255:0] name);
+		integer x, y;
+		begin
+			aim_decode(ax, ay, x, y);
+			checks = checks + 1;
+			if (x !== ex || y !== ey) begin
+				errors = errors + 1;
+				$display("FAIL %0s pal=%0d aim %0d,%0d: decodes to %0d,%0d expected %0d,%0d", name, GUN_PAL, ax, ay, x, y, ex, ey);
+			end
+		end
+	endtask
 
 	function automatic [15:0] ref_pad(input [12:0] j);
 		ref_pad = {1'b1, 2'b00, j[2], j[3], j[0], j[1], j[4], j[5], j[6], j[7], j[8], j[9], j[10], 2'b00};
@@ -167,31 +202,56 @@ module tb_hps2pad;
 		RST = 0;
 		tick(10);
 
-		// 1. count of the implementation against the reference for every aim point,
-		//    NTSC and PAL, and the pixel the driver decodes from it
+		// 1. count of the implementation against the reference for every aim value,
+		//    NTSC and PAL, and the pixel the driver decodes from it (exact), then the
+		//    screen edges and the middle by value, and the aim reaching every edge
+		//    pixel row and column in order
 		GUN_SEL = 1;
 		for (pal = 0; pal < 2; pal = pal + 1) begin
 			GUN_PAL = pal[0];
-			for (ux = 0; ux < 256; ux = ux + 1) begin
-				for (uy = 0; uy < 256; uy = uy + 1) begin
-					joy0_x0 = to_axis(ux);
-					joy0_y0 = to_axis(uy);
-					repeat (130) @(posedge CLK);
-					#1;
+			for (ux = -128; ux < 128; ux = ux + 1) begin
+				for (uy = -128; uy < 128; uy = uy + 1) begin
+					aim_decode(ux, uy, dx, dy);
 					checks = checks + 1;
 					if (dut.lg_count !== ref_counter(ux, uy)) begin
 						errors = errors + 1;
-						if (errors < 20) $display("FAIL counter pal=%0d ux=%0d uy=%0d: got %0d expected %0d", pal, ux, uy, dut.lg_count, ref_counter(ux, uy));
+						if (errors < 20) $display("FAIL counter pal=%0d aim %0d,%0d: got %0d expected %0d", pal, ux, uy, dut.lg_count, ref_counter(ux, uy));
 					end
-					decode(dut.lg_count, dx, dy);
-					px = (ux * (GUN_PAL ? 388 : 320)) / 256;
-					py = (uy * (GUN_PAL ? 288 : 240)) / 256;
+					px = ref_px(ux, 319);
+					py = ref_px(uy, 239);
 					checks = checks + 1;
-					if (dy !== py || dx > px || dx < px - 1) begin
+					if (dy !== py || dx !== px) begin
 						errors = errors + 1;
 						if (errors < 20) $display("FAIL decode pal=%0d pixel %0d,%0d decodes to %0d,%0d", pal, px, py, dx, dy);
 					end
 				end
+			end
+			check_pixel(-127, -127,   0,   0, "top left");
+			check_pixel(-128, -128,   0,   0, "clamped top left");
+			check_pixel( 127, -127, 319,   0, "top right");
+			check_pixel(-127,  127,   0, 239, "bottom left");
+			check_pixel( 127,  127, 319, 239, "bottom right");
+			check_pixel(   0,    0, 160, 120, "middle");
+			// moving right along a row: x never goes back, never jumps more than 2, y stays
+			px = -1;
+			for (ux = -127; ux < 128; ux = ux + 1) begin
+				aim_decode(ux, 0, dx, dy);
+				checks = checks + 1;
+				if (dy !== 120 || dx < px || dx > px + 2 || (ux == -127 && dx != 0)) begin
+					errors = errors + 1;
+					$display("FAIL row pal=%0d aim %0d: %0d,%0d after x=%0d", pal, ux, dx, dy, px);
+				end
+				px = dx;
+			end
+			py = -1;
+			for (uy = -127; uy < 128; uy = uy + 1) begin
+				aim_decode(0, uy, dx, dy);
+				checks = checks + 1;
+				if (dx !== 160 || dy < py || dy > py + 1 || (uy == -127 && dy != 0)) begin
+					errors = errors + 1;
+					$display("FAIL column pal=%0d aim %0d: %0d,%0d after y=%0d", pal, uy, dx, dy, py);
+				end
+				py = dy;
 			end
 			$display("counter sweep pal=%0d done, errors=%0d", pal, errors);
 		end
@@ -200,8 +260,8 @@ module tb_hps2pad;
 		// 2. gun alone on the bus, grid of aim points incl. corners, trigger alternating
 		PAD_SEL = 0;
 		for (i = 0; i < 25; i = i + 1) begin
-			ux = (i % 5) * 63 + ((i % 5) == 4 ? 3 : 0);
-			uy = (i / 5) * 63 + ((i / 5) == 4 ? 3 : 0);
+			ux = (i % 5) * 63 - 127 + ((i % 5) == 4 ? 2 : 0);
+			uy = (i / 5) * 63 - 127 + ((i / 5) == 4 ? 2 : 0);
 			joy0_x0 = to_axis(ux);
 			joy0_y0 = to_axis(uy);
 			joystick_0 = i[0] ? BTN_A : 13'd0;
@@ -226,19 +286,19 @@ module tb_hps2pad;
 		GUN_SEL = 2;
 		joystick_0 = 13'h0425;
 		joystick_1 = BTN_A;
-		joy0_x0 = to_axis(10);
-		joy0_y0 = to_axis(20);
-		joy1_x0 = to_axis(200);
-		joy1_y0 = to_axis(77);
+		joy0_x0 = to_axis(-118);
+		joy0_y0 = to_axis(-108);
+		joy1_x0 = to_axis(72);
+		joy1_y0 = to_axis(-51);
 		frame();
-		check({8'h4D, 1'b1, 3'b000, 1'b0, 2'b00, ref_counter(200, 77), 5'h1F, ref_pad(13'h0425), {NBITS-56{1'b1}}}, "gun joy2 + pad");
+		check({8'h4D, 1'b1, 3'b000, 1'b0, 2'b00, ref_counter(72, -51), 5'h1F, ref_pad(13'h0425), {NBITS-56{1'b1}}}, "gun joy2 + pad");
 
 		// 6. the gun on joystick 0 followed by two pads
 		PAD_SEL = 2;
 		GUN_SEL = 1;
 		joystick_1 = 13'h0081;
 		frame();
-		check({8'h4D, 1'b0, 3'b000, 1'b1, 2'b00, ref_counter(10, 20), 5'h1F, ref_pad(13'h0425), ref_pad(13'h0081), {NBITS-72{1'b1}}}, "gun joy1 + 2 pads");
+		check({8'h4D, 1'b0, 3'b000, 1'b1, 2'b00, ref_counter(-118, -108), 5'h1F, ref_pad(13'h0425), ref_pad(13'h0081), {NBITS-72{1'b1}}}, "gun joy1 + 2 pads");
 
 		// 7. gun is not available with 3 pads
 		PAD_SEL = 3;
@@ -253,16 +313,16 @@ module tb_hps2pad;
 		joystick_0 = BTN_A | BTN_COIN;
 		joystick_1 = 13'd0;
 		frame();
-		check({8'h4D, 1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 2'b00, ref_counter(10, 20), 5'h1F, {NBITS-40{1'b1}}}, "arcade gun coin");
+		check({8'h4D, 1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 2'b00, ref_counter(-118, -108), 5'h1F, {NBITS-40{1'b1}}}, "arcade gun coin");
 		ARCADE_SERVICE = 0;
 		joystick_0 = BTN_START;
 		frame();
-		check({8'h4D, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0, 2'b00, ref_counter(10, 20), 5'h1F, {NBITS-40{1'b1}}}, "arcade gun start");
+		check({8'h4D, 1'b0, 1'b0, 1'b0, 1'b1, 1'b0, 2'b00, ref_counter(-118, -108), 5'h1F, {NBITS-40{1'b1}}}, "arcade gun start");
 
 		// 9. arcade gun holstered
 		joystick_0 = BTN_C;
 		frame();
-		check({8'h4D, 1'b0, 1'b0, 1'b0, 1'b0, 1'b1, 2'b00, ref_counter(0, 0), 5'h00, {NBITS-40{1'b1}}}, "arcade gun holster");
+		check({8'h4D, 1'b0, 1'b0, 1'b0, 1'b0, 1'b1, 2'b00, ref_counter(-127, -127), 5'h00, {NBITS-40{1'b1}}}, "arcade gun holster");
 
 		// 10. existing devices are unchanged with the gun off
 		ARCADE_SEL = 0;
@@ -285,10 +345,10 @@ module tb_hps2pad;
 		GUN_SEL = 1;
 		GUN_PAL = 1;
 		joystick_0 = BTN_A;
-		joy0_x0 = to_axis(255);
-		joy0_y0 = to_axis(255);
+		joy0_x0 = to_axis(127);
+		joy0_y0 = to_axis(127);
 		frame();
-		check({8'h4D, 1'b1, 3'b000, 1'b0, 2'b00, ref_counter(255, 255), 5'h1F, {NBITS-40{1'b1}}}, "gun PAL");
+		check({8'h4D, 1'b1, 3'b000, 1'b0, 2'b00, ref_counter(127, 127), 5'h1F, {NBITS-40{1'b1}}}, "gun PAL");
 		GUN_PAL = 0;
 		GUN_SEL = 0;
 

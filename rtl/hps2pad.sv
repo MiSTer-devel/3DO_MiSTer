@@ -43,7 +43,7 @@ module HPS2PAD (
 
 	function automatic signed [10:0] mouse_delta(input ovf, input sign, input [7:0] data);
 		begin
-			if (ovf) mouse_delta = sign ? -11'sd1024 : 11'sd1022;
+			if (ovf) mouse_delta = sign ? 11'sh400 : 11'sd1022;
 			else     mouse_delta = $signed({sign,sign,sign,data}) <<< 1;
 		end
 	endfunction
@@ -51,7 +51,7 @@ module HPS2PAD (
 	function automatic signed [10:0] mouse_limit(input signed [11:0] axis);
 		begin
 			if (axis > 12'sd1023) mouse_limit = 11'sd1023;
-			else if (axis < -12'sd1024) mouse_limit = -11'sd1024;
+			else if (axis < -12'sd1024) mouse_limit = 11'sh400;
 			else mouse_limit = axis[10:0];
 		end
 	endfunction
@@ -190,33 +190,44 @@ module HPS2PAD (
 	//   c' = count + TIMEOFFSET, y = 10 c' / YSCANTIME,
 	//   x = ((10 c') % YSCANTIME) * WIDTH / (XSCANTIME * 10).
 	// Here, for a pixel (x, y):
-	//   count = ceil((y * YSCANTIME + x * XSCANTIME * 10 / WIDTH) / 10) - TIMEOFFSET
+	//   count = ceil((y * YSCANTIME + ceil(x * XSCANTIME * 10 / WIDTH)) / 10) - TIMEOFFSET
 	// Opera rounds the division by 10 down; then 10 c' can fall before the
 	// line's start, and the driver decodes x = 0 as the end of the line
-	// above. Rounded up, every pixel decodes to itself (x within one:
-	// x * XSCANTIME * 10 / WIDTH is rounded down). NTSC 1030 / 12707 / -12835 /
-	// 320 x 240, PAL 1051 / 12796 / -58995 / 388 x 288 (lightgun.h: the PAL
-	// values are the SDK's defaults, not verified on a PAL gun). The divisions
-	// run in a small serial divider that repeats all the time (about 60
-	// clocks); the result changes only between whole computations.
-	// The aim is the light gun position hps_io gives on the left analog axes.
+	// above. With both divisions rounded up every pixel decodes to itself:
+	// a pixel is XSCANTIME * 10 / WIDTH (27 PAL, 32 NTSC) units of 10 c'
+	// wide, the two roundings add at most 10. NTSC 1030 / 12707 / -12835 /
+	// 320 wide, PAL 1051 / 12796 / -58995 / 388 wide (lightgun.h: the PAL
+	// values are the SDK's defaults, not verified on a PAL gun).
+	// The aim is the light gun position hps_io gives on the left analog axes:
+	// Main_MiSTer scales the calibrated screen to -127..+127 (clamped there;
+	// -128 is taken as -127). The screen it was calibrated on is the VE
+	// window, framebuffer pixels 0..319 x 0..239 in NTSC and in PAL (VE keeps
+	// the 640 dot, 240 line window in PAL), so the aim maps to that, rounded:
+	//   x = ((a + 127) * 319 + 127) / 254, y = ((a + 127) * 239 + 127) / 254
+	// -127 is the first pixel, 0 the middle (160, 120), +127 the last. The
+	// division by 254 is a multiplication by 132105 / 2^25 (exact for these
+	// numbers). The other divisions run in a small serial divider that
+	// repeats all the time (about 60 clocks); the result changes only
+	// between whole computations.
 	wire        gun_arcade = (ARCADE_SEL == 2'd2);
 	wire        gun_joy1 = (GUN_SEL == 2'd2) && !gun_arcade;
 	wire [12:0] gun_btn = gun_joy1 ? joystick_1 : joystick_0;
-	wire [ 7:0] gun_ux = stick_axis($signed(gun_joy1 ? joy1_x0 : joy0_x0));
-	wire [ 7:0] gun_uy = stick_axis($signed(gun_joy1 ? joy1_y0 : joy0_y0));
+	wire [ 7:0] gun_ax = gun_joy1 ? joy1_x0 : joy0_x0;
+	wire [ 7:0] gun_ay = gun_joy1 ? joy1_y0 : joy0_y0;
+	wire [ 7:0] gun_ux = (gun_ax == 8'h80) ? 8'd0 : 8'(gun_ax + 8'd127);   // 0..254
+	wire [ 7:0] gun_uy = (gun_ay == 8'h80) ? 8'd0 : 8'(gun_ay + 8'd127);
 	
 	wire        gun_trigger = gun_btn[4];             //A
 	wire        gun_option = gun_btn[5];              //B
 	wire        gun_offscreen = gun_btn[6];           //C: shot off screen (reload) / holster
 	
 	wire [ 8:0] LG_W   = GUN_PAL ? 9'd388 : 9'd320;
-	wire [ 8:0] LG_H   = GUN_PAL ? 9'd288 : 9'd240;
 	wire [10:0] LG_XS  = GUN_PAL ? 11'd1051 : 11'd1030;
 	wire [13:0] LG_YS  = GUN_PAL ? 14'd12796 : 14'd12707;
 	wire [15:0] LG_OFF = GUN_PAL ? 16'd58995 : 16'd12835;
 	reg  [19:0] lg_count;   // cleared by RST
 	reg  [ 2:0] lg_st;
+	reg  [16:0] lg_nx, lg_ny;
 	reg  [ 8:0] lg_px, lg_py;
 	reg  [23:0] lg_num, lg_q, lg_rem;
 	reg  [ 8:0] lg_den;
@@ -227,18 +238,23 @@ module HPS2PAD (
 			lg_count <= '0;
 		end else begin
 			case (lg_st)
-				3'd0: begin   // pixel position from the aim
-					lg_px <= 9'((17'(gun_ux) * LG_W) >> 8);
-					lg_py <= 9'((17'(gun_uy) * LG_H) >> 8);
+				3'd0: begin   // aim -127..+127 to 0..254, times the last pixel, + half of 254
+					lg_nx <= 17'(gun_ux) * 17'd319 + 17'd127;
+					lg_ny <= 17'(gun_uy) * 17'd239 + 17'd127;
 					lg_st <= 3'd1;
 				end
-				3'd1: begin   // x * XSCANTIME * 10 / WIDTH
-					lg_num <= 24'(lg_px * LG_XS * 10);
-					lg_den <= LG_W;
-					lg_q <= '0; lg_rem <= '0; lg_bit <= 5'd23;
+				3'd1: begin   // / 254: pixel position
+					lg_px <= 9'((35'(lg_nx) * 35'd132105) >> 25);
+					lg_py <= 9'((35'(lg_ny) * 35'd132105) >> 25);
 					lg_st <= 3'd2;
 				end
-				3'd2, 3'd4: begin   // one bit of a restoring division a step
+				3'd2: begin   // x * XSCANTIME * 10 / WIDTH, rounded up
+					lg_num <= 24'(lg_px * LG_XS * 10) + 24'(LG_W) - 24'd1;
+					lg_den <= LG_W;
+					lg_q <= '0; lg_rem <= '0; lg_bit <= 5'd23;
+					lg_st <= 3'd3;
+				end
+				3'd3, 3'd5: begin   // one bit of a restoring division a step
 					reg [24:0] r;
 					r = {lg_rem, lg_num[lg_bit]};
 					if (r >= 25'(lg_den)) begin lg_rem <= 24'(r - 25'(lg_den)); lg_q[lg_bit] <= 1'b1; end
@@ -246,13 +262,13 @@ module HPS2PAD (
 					if (lg_bit == 0) lg_st <= lg_st + 3'd1;
 					else lg_bit <= lg_bit - 5'd1;
 				end
-				3'd3: begin   // + y * YSCANTIME, then / 10 rounded up
+				3'd4: begin   // + y * YSCANTIME, then / 10 rounded up
 					lg_num <= 24'(lg_py * LG_YS) + lg_q + 24'd9;
 					lg_den <= 9'd10;
 					lg_q <= '0; lg_rem <= '0; lg_bit <= 5'd23;
-					lg_st <= 3'd4;
+					lg_st <= 3'd5;
 				end
-				3'd5: begin   // - TIMEOFFSET, 20 bits
+				3'd6: begin   // - TIMEOFFSET, 20 bits
 					lg_count <= 20'(lg_q + 24'(LG_OFF));
 					lg_st <= 3'd0;
 				end
