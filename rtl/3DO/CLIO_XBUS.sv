@@ -19,6 +19,7 @@ module CLIO_XBUS
 	output reg         DMA_ACT,
 	output reg         DMA_RDY,
 	output reg [31: 0] DMA_DO,
+	output reg         DMA_RST,         // XB_DMARESET: flush CLIO's expansion DMA FIFO
 	
 	input      [ 7: 0] EDI,
 	output reg [ 7: 0] EDO,
@@ -68,6 +69,7 @@ module CLIO_XBUS
 			DMA_RDY <= 0;
 //			DMA_PAUSE <= 0;
 			DMA_BYTE_CNT <= '0;
+			DMA_RST <= 0;
 			
 			XB_DIR <= 0;
 			XB_RESET <= 0;
@@ -79,6 +81,7 @@ module CLIO_XBUS
 			if (RD) begin IO_RD_PEND <= 1; RDY <= 0; end
 			
 			DMA_RDY <= 0;
+			DMA_RST <= 0;
 			ESTR_N <= 1;
 			case (XBUS_ST)
 				XBUS_IDLE: begin
@@ -86,7 +89,11 @@ module CLIO_XBUS
 						casex ({A[9:2],2'b00})
 							10'h000: begin XB_DIR <= XB_DIR | DI[9];
 						                  XB_DMAON <= XB_DMAON | DI[11];
-												XB_RESET <= XB_RESET | DI[15]; end
+												XB_RESET <= XB_RESET | DI[15];
+												// XB_DMARESET (bit 14, "also does a flush", Portfolio
+												// clio.h): the DMA stops and its partial word and
+												// CLIO's FIFO are dropped
+												if (DI[14]) begin XB_DMAON <= 0; DMA_BYTE_CNT <= '0; DMA_DO <= '0; DMA_RST <= 1; end end
 							10'h004: begin XB_CPUHASXBUS <= XB_CPUHASXBUS & ~DI[7]; 
 												XB_DIR <= XB_DIR & ~DI[9];
 						                  XB_DMAON <= XB_DMAON & ~DI[11];
@@ -113,7 +120,7 @@ module CLIO_XBUS
 					else if (IO_RD_PEND) begin
 						casex ({A[9:2],2'b00})
 							10'h000,
-							10'h004: DO <= {24'h000000,XB_CPUHASXBUS,7'b000_0000};
+							10'h004: DO <= {16'h0000,XB_RESET,3'b000,XB_DMAON,1'b0,XB_DIR,1'b0,XB_CPUHASXBUS,7'b000_0000};
 							10'h014: DO <= 32'h00004000;
 							10'h14x,
 							10'h15x,

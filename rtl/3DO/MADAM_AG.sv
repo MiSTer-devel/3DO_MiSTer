@@ -80,6 +80,18 @@ module MADAM_AG
 	output             RDSF,
 	input              RQSF,
 	output     [ 3: 0] RCODE,
+	
+	// The memory bus as the DDR3 VRAM path (ddram.sv) takes it: the address
+	// and the VRAM RAS from the address register of the access's second phase
+	// (ADDR_COL_FF) instead of the generator's first phase path. ddram.sv acts
+	// on OE/WE strobes only, which come in PHASE2 (and with the cel engine's
+	// own addresses, the same in both), where the two are the same; in PHASE1
+	// the address comes straight from the DMA stack and the adders, too late
+	// for a clk_mem register.
+	output     [23: 2] LA_COL,
+	output             LRAS0_COL_N,
+	output     [23: 2] RA_COL,
+	output             RRAS0_COL_N,
 
 	output reg [23: 0] DBG_REG100,DBG_REG104,DBG_REG110,DBG_REG114,
 	output reg [23: 0] DBG_REG120,DBG_REG124,DBG_REG128,DBG_REG12C,
@@ -136,6 +148,25 @@ module MADAM_AG
 	wire [ 6: 0] DMA_STACK_RADDR = {DMA_ADDR_FF_1,DMA_CTL.DMA_REG_READ_SEL ? DMA_CTL.DMA_REG_READ_CTL : DMA_ADDR_FF_0};
 	wire [ 6: 0] DMA_STACK_WADDR = DMA_CTL.DMA_REG_WRITE_SEL ? {DMA_ADDR_FF_1,DMA_ADDR_FF_0} : {DMA_ADDR_FF_1[6:3],DMA_CTL.DMA_REG_WRITE_CTL};
 	wire         DMA_STACK_WE = DMA_CTL.DMA_REG_WRITE_EN;
+	// A CPU write of an audio channel's current address (register 0) or
+	// remaining length (1) sets its next starting address (2) / length (3) to
+	// zero in the next clock tick (WO 94/10641, audio data groups: channels
+	// 0x00-0x0C to the DSP, 0x10-0x13 from it)
+	wire [ 4: 0] CPU_WCHAN = DMA_STACK_WADDR[6:2];
+	wire         CPU_CUR_WRITE = DMA_CTL.DMA_REG_WRITE_SEL && DMA_STACK_WE && !DMA_STACK_WADDR[1] &&
+	                             (CPU_WCHAN <= 5'h0C || (CPU_WCHAN >= 5'h10 && CPU_WCHAN <= 5'h13));
+	bit          NEXT_CLEAR;
+	bit  [ 6: 0] NEXT_CLEAR_ADDR;
+	always @(posedge CLK or negedge RST_N) begin
+		if (!RST_N) begin
+			NEXT_CLEAR <= 0;
+			NEXT_CLEAR_ADDR <= '0;
+		end
+		else if (EN && CE_R) begin
+			NEXT_CLEAR <= CPU_CUR_WRITE;
+			if (CPU_CUR_WRITE) NEXT_CLEAR_ADDR <= DMA_STACK_WADDR | 7'h02;
+		end
+	end
 	
 	bit  [23: 2] DMA_STACK_OUT;
 	MADAM_DMA_STACK DMA_STACK
@@ -144,9 +175,9 @@ module MADAM_AG
 		.CE(CE_R),
 		.EN(EN),
 		
-		.WADDR(DMA_STACK_WADDR),
-		.DIN(DMA_STACK_IN),
-		.WE(DMA_STACK_WE),
+		.WADDR(NEXT_CLEAR ? NEXT_CLEAR_ADDR : DMA_STACK_WADDR),
+		.DIN(NEXT_CLEAR ? 22'h000000 : DMA_STACK_IN),
+		.WE(NEXT_CLEAR || DMA_STACK_WE),
 		
 		.RADDR(DMA_STACK_RADDR),
 		.DOUT(DMA_STACK_OUT)
@@ -306,7 +337,13 @@ module MADAM_AG
 					V480 <= MDTI[19];
 				end
 				
-				CLUT_CURR1: begin
+				// Game Bub port: only an entry that loads the current-line
+				// address (LDCURR: the register write is enabled) sets the
+				// field line from it; others keep the line sequence (Opera's
+				// vdlp_process_vdl_entry). The original took bit 1 of every
+				// entry's address word, so a palette-only entry on an odd line
+				// repeated the line above and shifted the rest down a line.
+				CLUT_CURR1: if (DMA_CTL.DMA_REG_WRITE_EN) begin
 					CURR1_LATCH <= MDTI[1];
 					CURR_FETCHED <= 1;
 				end
@@ -357,22 +394,6 @@ module MADAM_AG
 	
 	wire         CPU_RAM_SEL = CPU_DRAM0_SEL || CPU_DRAM1_SEL || CPU_VRAM_SEL;
 	
-	bit  [23: 0] DRAM0_END,DRAM1_START,DRAM1_END,VRAM_START,VRAM_END;
-	always_comb begin
-		case (MEM_SIZE[4:3])
-			2'b00: begin DRAM0_END = 24'h000000; DRAM1_START = 24'h000000; end
-			2'b01: begin DRAM0_END = 24'h0FFFFF; DRAM1_START = 24'h100000; end
-			2'b10: begin DRAM0_END = 24'h3FFFFF; DRAM1_START = 24'h400000; end
-			2'b11: begin DRAM0_END = 24'hDFFFFF; DRAM1_START = 24'hE00000; end
-		endcase
-		case (MEM_SIZE[6:5])
-			2'b00: begin DRAM1_END = DRAM1_START + 24'h000000; VRAM_START = DRAM1_START + 24'h000000; end
-			2'b01: begin DRAM1_END = DRAM1_START + 24'h0FFFFF; VRAM_START = DRAM1_START + 24'h100000; end
-			2'b10,
-			2'b11: begin DRAM1_END = DRAM1_START + 24'h3FFFFF; VRAM_START = DRAM1_START + 24'h400000; end
-		endcase
-		VRAM_END = VRAM_START + 24'h100000;
-	end
 	
 	
 	wire         AG_START =  (BUS_STATE_FF == EXTP_INIT1 || BUS_STATE_FF == EXTP_INIT3 || 
@@ -408,9 +429,10 @@ module MADAM_AG
 	wire [ 1: 0] AG_WE =  {2{BUS_STATE_FF == EXTP_WRITE0 || BUS_STATE_FF == EXTP_WRITE1}} | 
 	                      {2{BUS_STATE_FF == PLAY_WRITE0 || BUS_STATE_FF == PLAY_WRITE1}};
 	wire         AG_REF =  (BUS_STATE_FF == REF_INIT1 || BUS_STATE_FF == REF_WRITE0 || BUS_STATE_FF == REF_WRITE1 || BUS_STATE_FF == REF_WRITE2 || BUS_STATE_FF == REF_WRITE3);
-	wire         AG_DRAM0_SEL = ((AOUT >= (24'h000000>>2) && AOUT <= (DRAM0_END>>2)) || AG_REF) && |MEM_SIZE[4:3] && DRAM_EN;
-	wire         AG_DRAM1_SEL = ((AOUT >= (DRAM1_START>>2) && AOUT <= (DRAM1_END>>2)) || AG_REF) && |MEM_SIZE[6:5] && DRAM_EN;
-	wire         AG_VRAM_SEL  = (AOUT >= (VRAM_START>>2) && AOUT <= (VRAM_END>>2));
+	wire [ 2: 0] AG_MEM_SEL = MemRegionSel(MEM_SIZE, AOUT[23:20]);
+	wire         AG_DRAM0_SEL = (AG_MEM_SEL[0] || AG_REF) && |MEM_SIZE[4:3] && DRAM_EN;
+	wire         AG_DRAM1_SEL = (AG_MEM_SEL[1] || AG_REF) && |MEM_SIZE[6:5] && DRAM_EN;
+	wire         AG_VRAM_SEL  = AG_MEM_SEL[2];
 	
 	wire         CFB_START = (BUS_STATE_FF == CFB_INIT1);
 	wire         CFB_ACCESS = (BUS_STATE_FF == CFB_INIT1 ||
@@ -419,9 +441,10 @@ module MADAM_AG
 	wire [ 1: 0] CFB_CAS = {SE_WRITE_A&~SE_ADDR_A[1]&PHASE1,SE_WRITE_A&SE_ADDR_A[1]&PHASE1}|{SE_WRITE_B&~SE_ADDR_B[1]&PHASE2,SE_WRITE_B&SE_ADDR_B[1]&PHASE2};
 	wire [ 1: 0] CFB_WE = {2{BUS_STATE_FF == CFB_WRITE0 || BUS_STATE_FF == CFB_WRITE1}}&CFB_CAS;
 	wire [ 1: 0] CFB_OE = {2{BUS_STATE_FF == CFB_READ0 || BUS_STATE_FF == CFB_READ1}}&CFB_CAS;
-	wire         CFB_DRAM0_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (24'h000000>>2) && SE_ADDR_B[23:2] <= (DRAM0_END>>2)) : (SE_ADDR_A[23:2] >= (24'h000000>>2) && SE_ADDR_A[23:2] <= (DRAM0_END>>2));
-	wire         CFB_DRAM1_SEL = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (DRAM1_START>>2) && SE_ADDR_B[23:2] <= (DRAM1_END>>2)) : (SE_ADDR_A[23:2] >= (DRAM1_START>>2) && SE_ADDR_A[23:2] <= (DRAM1_END>>2));
-	wire         CFB_VRAM_SEL  = SE_RAS_B || SE_WRITE_B ? (SE_ADDR_B[23:2] >= (VRAM_START>>2) && SE_ADDR_B[23:2] <= (VRAM_END>>2)) : (SE_ADDR_A[23:2] >= (VRAM_START>>2) && SE_ADDR_A[23:2] <= (VRAM_END>>2));
+	wire [ 2: 0] CFB_MEM_SEL = SE_RAS_B || SE_WRITE_B ? MemRegionSel(MEM_SIZE, SE_ADDR_B[23:20]) : MemRegionSel(MEM_SIZE, SE_ADDR_A[23:20]);
+	wire         CFB_DRAM0_SEL = CFB_MEM_SEL[0];
+	wire         CFB_DRAM1_SEL = CFB_MEM_SEL[1];
+	wire         CFB_VRAM_SEL  = CFB_MEM_SEL[2];
 	
 	wire         PREV_TRANS = (BUS_STATE_FF == CLUT_TRANSFER0 || BUS_STATE_FF == CLUT_TRANSFER1 || 
 	                           BUS_STATE_FF == VID_PREV0 || BUS_STATE_FF == VID_PREV1);
@@ -463,6 +486,13 @@ module MADAM_AG
 	assign ROE_N    = SE_GRANT && CFB_ACCESS ? ~(CFB_OE[0]&CE_F)  : SE_GRANT || EXTP_GRANT || PLAYER_GRANT ? ~(AG_ACCESS & ~|AG_WE  & PHASE2)        : CPU_GRANT ? ~(CPU_ACCESS & ((CPU_RAM_SEL & ~|CPU_WE & PHASE2) | (CPU_SPORT_SEL & ~|CPU_ADDR[14:13] & PHASE1))) : ~((RIGHT_TRANS & PHASE1) | (CLUT_RW & PHASE2));
 	assign RDSF     =                                               SE_GRANT || EXTP_GRANT || PLAYER_GRANT ? 1'b0                                        : CPU_GRANT ? (CPU_ACCESS & CPU_SPORT_SEL & |CPU_ADDR[14:13] /*& PHASE1*/) :  (RIGHT_SPLIT & PHASE1);
 	assign RCODE    = SE_GRANT && CFB_ACCESS ? {CFB_START,1'b0,CFB_WE[0],CFB_OE[0]} :SE_GRANT || EXTP_GRANT || PLAYER_GRANT ? {AG_START,AG_REF,AG_ACCESS&|AG_WE&PHASE2,AG_ACCESS&~|AG_WE&PHASE1} : CPU_GRANT ? {CPU_START,1'b0,CPU_ACCESS&CPU_RAM_SEL&|CPU_WE&PHASE2,CPU_ACCESS&CPU_RAM_SEL&~|CPU_WE&PHASE1}     : 4'b0000;
+
+	wire [ 2: 0] AG_MEM_COL_SEL = MemRegionSel(MEM_SIZE, ADDR_COL_FF[23:20]);
+	wire         AG_VRAM_COL_SEL = AG_MEM_COL_SEL[2];
+	assign LA_COL   = SE_GRANT && CFB_ACCESS ? (SE_RAS_B || (SE_WRITE_B && (PHASE2 || !SE_WRITE_A)) ? SE_ADDR_B[23:2] : SE_ADDR_A[23:2]) : CPU_GRANT && CPU_SPORT_SEL ? {4'b0000,ADDR_COL_FF[10:2],9'b000000000} : ADDR_COL_FF;
+	assign LRAS0_COL_N = SE_GRANT && CFB_ACCESS ? ~CFB_VRAM_SEL      : SE_GRANT || EXTP_GRANT || PLAYER_GRANT ? ~((AG_START|AG_ACCESS|AG_REF) & AG_VRAM_COL_SEL )  : CPU_GRANT ? ~(((CPU_START|CPU_ACCESS) & CPU_VRAM_SEL ) | (CPU_ACCESS & CPU_SPORT_SEL)) : ~(LEFT_TRANS | CLUT_START | CLUT_RW);
+	assign RA_COL   = SE_GRANT && CFB_ACCESS ? (SE_RAS_B || (SE_WRITE_B && (PHASE2 || !SE_WRITE_A)) ? SE_ADDR_B[23:2] : SE_ADDR_A[23:2]) : CPU_GRANT && CPU_SPORT_SEL ? {4'b0000,ADDR_COL_FF[10:2],9'b000000000} : ADDR_COL_FF;
+	assign RRAS0_COL_N = SE_GRANT && CFB_ACCESS ? ~CFB_VRAM_SEL      : SE_GRANT || EXTP_GRANT || PLAYER_GRANT ? ~((AG_START|AG_ACCESS|AG_REF) & AG_VRAM_COL_SEL )  : CPU_GRANT ? ~(((CPU_START|CPU_ACCESS) & CPU_VRAM_SEL ) | (CPU_ACCESS & CPU_SPORT_SEL)) : ~(RIGHT_TRANS | CLUT_START | CLUT_RW);
 	
 endmodule
 

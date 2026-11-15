@@ -109,18 +109,20 @@ module ARM6_RB (
 	
 `else 
 
+	// Game Bub port: the write enables include EN, as GR_R15's and the simulation
+	// bank's do (registers were written while the core was paused, EN low)
 	bit [31:0]  RB_USR_A_Q,RB_USR_B_Q; 
-	ARM6_RB_RAM RB_USR (CLK,W_A,W_D,USR_SEL & W_WE & CE,RA_A,RB_USR_A_Q,RB_A,RB_USR_B_Q);
+	ARM6_RB_RAM RB_USR (CLK,W_A,W_D,USR_SEL & W_WE & CE & EN,RA_A,RB_USR_A_Q,RB_A,RB_USR_B_Q);
 	bit [31:0]  RB_FIQ_A_Q,RB_FIQ_B_Q; 
-	ARM6_RB_RAM RB_FIQ (CLK,W_A,W_D,FIQ_SEL & W_WE & CE,RA_A,RB_FIQ_A_Q,RB_A,RB_FIQ_B_Q);
+	ARM6_RB_RAM RB_FIQ (CLK,W_A,W_D,FIQ_SEL & W_WE & CE & EN,RA_A,RB_FIQ_A_Q,RB_A,RB_FIQ_B_Q);
 	bit [31:0]  RB_SVC_A_Q,RB_SVC_B_Q; 
-	ARM6_RB_RAM RB_SVC (CLK,W_A,W_D,SVC_SEL & W_WE & CE,RA_A,RB_SVC_A_Q,RB_A,RB_SVC_B_Q);
+	ARM6_RB_RAM RB_SVC (CLK,W_A,W_D,SVC_SEL & W_WE & CE & EN,RA_A,RB_SVC_A_Q,RB_A,RB_SVC_B_Q);
 	bit [31:0]  RB_ABT_A_Q,RB_ABT_B_Q; 
-	ARM6_RB_RAM RB_ABT (CLK,W_A,W_D,ABT_SEL & W_WE & CE,RA_A,RB_ABT_A_Q,RB_A,RB_ABT_B_Q);
+	ARM6_RB_RAM RB_ABT (CLK,W_A,W_D,ABT_SEL & W_WE & CE & EN,RA_A,RB_ABT_A_Q,RB_A,RB_ABT_B_Q);
 	bit [31:0]  RB_IRQ_A_Q,RB_IRQ_B_Q; 
-	ARM6_RB_RAM RB_IRQ (CLK,W_A,W_D,IRQ_SEL & W_WE & CE,RA_A,RB_IRQ_A_Q,RB_A,RB_IRQ_B_Q);
+	ARM6_RB_RAM RB_IRQ (CLK,W_A,W_D,IRQ_SEL & W_WE & CE & EN,RA_A,RB_IRQ_A_Q,RB_A,RB_IRQ_B_Q);
 	bit [31:0]  RB_UND_A_Q,RB_UND_B_Q; 
-	ARM6_RB_RAM RB_UND (CLK,W_A,W_D,UND_SEL & W_WE & CE,RA_A,RB_UND_A_Q,RB_A,RB_UND_B_Q);
+	ARM6_RB_RAM RB_UND (CLK,W_A,W_D,UND_SEL & W_WE & CE & EN,RA_A,RB_UND_A_Q,RB_A,RB_UND_B_Q);
 
 	
 	assign RA_Q = RA_A == 4'd15                    ? GR_R15 : 

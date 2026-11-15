@@ -349,6 +349,7 @@ package P3DO_PKG;
 	typedef struct packed
 	{
 		bit         MF;
+		bit         MCW;
 		bit         NP;
 		bit         LC;
 		bit         RC;
@@ -580,6 +581,37 @@ package P3DO_PKG;
 			4'hF: res = {{ 1{DATA[19]&~T}},DATA[19: 1]};
 		endcase
 		
+		return res;
+	endfunction
+
+	// MADAM's memory map by megabyte, from MSYS[6:0] (the memory sizes): bit 0
+	// DRAM bank 0, bit 1 DRAM bank 1, bit 2 VRAM. Every region bound is on a
+	// megabyte boundary, so the megabyte of an address (bits 23:20) decides.
+	// It replaces 22-bit range compares of each address against the bounds,
+	// which were on the address path to the memories (VRAM is its megabyte
+	// only: the compares also took the first word after it).
+	function automatic bit [2:0] MemRegionSel(input [6:0] MSIZE, input [3:0] MB);
+		bit [23:0] D0E,D1S,D1E,VS;
+		bit [23:0] LO,HI;
+		bit [2:0] res;
+
+		case (MSIZE[4:3])
+			2'b00: begin D0E = 24'h000000; D1S = 24'h000000; end
+			2'b01: begin D0E = 24'h0FFFFF; D1S = 24'h100000; end
+			2'b10: begin D0E = 24'h3FFFFF; D1S = 24'h400000; end
+			2'b11: begin D0E = 24'hDFFFFF; D1S = 24'hE00000; end
+		endcase
+		case (MSIZE[6:5])
+			2'b00: begin D1E = D1S + 24'h000000; VS = D1S + 24'h000000; end
+			2'b01: begin D1E = D1S + 24'h0FFFFF; VS = D1S + 24'h100000; end
+			2'b10,
+			2'b11: begin D1E = D1S + 24'h3FFFFF; VS = D1S + 24'h400000; end
+		endcase
+		LO = {MB,20'h00000};
+		HI = {MB,20'hFFFFF};
+		res[0] = (HI <= D0E);
+		res[1] = (LO >= D1S && HI <= D1E);
+		res[2] = (MB == VS[23:20]) && (VS[23:20] != 4'hF);   // VRAM in the last megabyte: its end bound wrapped and nothing was selected
 		return res;
 	endfunction
 

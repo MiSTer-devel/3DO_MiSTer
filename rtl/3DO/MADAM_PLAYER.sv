@@ -28,8 +28,8 @@ module MADAM_PLAYER
 	output reg         REF_REQ,
 	
 	input              PBDI,
-	output             PBDO,
-	output             PBCLK,
+	output reg             PBDO,
+	output reg             PBCLK,
 	
 	output reg [ 9: 0] DBG_WAIT_CNT
 );
@@ -48,9 +48,23 @@ module MADAM_PLAYER
 	
 	bit          SHIFT_STROBE,SHIFT_LAST;
 	bit  [ 4: 0] SHIFT_CNT;
+	// GameBub: the data bit of each falling PBCLK edge is taken on the video
+	// clock, CAP_DLY VCE clocks after the edge (the pad presents it right after
+	// the edge and keeps it until the next one, at least 100 clocks later),
+	// into a queue that the bus-clock side shifts in when it runs. MiSTer took
+	// it on the bus clock (SHIFT_PEND), which the core's PAUSE stops: a pause
+	// longer than a PBCLK period (8 us) lost a bit, and the pad words after it
+	// arrived misaligned (phantom buttons: the "no more devices" 1s slid into
+	// the pad word). Pauses are that long here: a VRAM page copy through the
+	// SDRAM takes about 30 us.
+	localparam bit [5:0] CAP_DLY = 6'd50;
+	bit  [ 5: 0] CAP_CNT;
+	bit  [31: 0] BITQ;
+	bit  [ 5: 0] BITQ_WP, BITQ_RP;   // 32 entries
+	bit          SHIFT_BIT;
 	always @(posedge CLK or negedge RST_N) begin
 		bit          ENABLE;
-		bit          START_PEND,END_PEND,SHIFT_PEND;
+		bit          START_PEND,END_PEND;
 		
 		if (!RST_N) begin
 			PBCLK <= 0;
@@ -59,13 +73,23 @@ module MADAM_PLAYER
 			ENABLE <= 0;
 			START_PEND <= 0;
 			END_PEND <= 0;
-			SHIFT_PEND <= 0;
+			CAP_CNT <= '0;
+			BITQ_WP <= '0;
+			BITQ_RP <= '0;
 			// synopsys translate_off
 			PEND <= 0;
 			// synopsys translate_on
 		end else begin
 			if (EN && VCE) begin
 				DBG_WAIT_CNT <= DBG_WAIT_CNT + 1'd1;
+				
+				if (CAP_CNT != 6'd0) begin
+					CAP_CNT <= CAP_CNT - 6'd1;
+					if (CAP_CNT == 6'd1) begin
+						BITQ[BITQ_WP[4:0]] <= PBDI;
+						BITQ_WP <= BITQ_WP + 6'd1;
+					end
+				end
 				
 				if (V_CNT <= 10'd7) begin
 					PBCLK <= 1;
@@ -74,6 +98,8 @@ module MADAM_PLAYER
 					PBCLK <= 0;
 					ENABLE <= PLAYXEN;
 					DBG_WAIT_CNT <= '0;
+					BITQ_WP <= BITQ_RP;   // a frame's bits still queued by now are dropped
+					CAP_CNT <= '0;
 				end else if (V_CNT == 10'd16 && H_CNT == 11'd0 && ENABLE) begin
 					START_PEND <= 1;
 				end else if (V_CNT <= 10'd239 && ENABLE) begin
@@ -82,7 +108,7 @@ module MADAM_PLAYER
 					end
 					if (H_CNT == 11'd200 - 1 || H_CNT == 11'd400 - 1 || H_CNT == 11'd600 - 1 || H_CNT == 11'd800 - 1 || H_CNT == 11'd1000 - 1 || H_CNT == 11'd1200 - 1 || H_CNT == 11'd1400 - 1 || H_CNT == 11'd1559 - 1) begin
 						PBCLK <= 0;
-						SHIFT_PEND <= 1;
+						CAP_CNT <= CAP_DLY;
 						
 					end
 				end else begin
@@ -104,8 +130,9 @@ module MADAM_PLAYER
 					PLAY_REQ <= 1;
 					START_PEND <= 0;
 				end
-				else if (SHIFT_PEND) begin
-					SHIFT_PEND <= 0;
+				else if (BITQ_RP != BITQ_WP) begin
+					SHIFT_BIT <= BITQ[BITQ_RP[4:0]];
+					BITQ_RP <= BITQ_RP + 6'd1;
 					SHIFT_STROBE <= 1;
 					SHIFT_CNT <= SHIFT_CNT + 5'd1;
 					if (SHIFT_CNT == 5'd31) begin
@@ -143,7 +170,7 @@ module MADAM_PLAYER
 		else if (EN && CE_R) begin
 			OUT <= 0;
 			if (SHIFT_STROBE) begin
-				{PBDO,SHF_REG} <= {SHF_REG,PBDI};
+				{PBDO,SHF_REG} <= {SHF_REG,SHIFT_BIT};   // GameBub: the queued bit (was PBDI)
 				OUT <= SHIFT_LAST;
 			end
 			if (OUT) begin

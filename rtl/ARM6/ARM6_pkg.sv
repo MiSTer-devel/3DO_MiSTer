@@ -160,10 +160,23 @@ package ARM6_PKG;
 		CYC_INT_ADDR
 	} CycleOp_t; 
 
+	// Game Bub port: instructions that take the undefined instruction trap
+	// (ARM60 datasheet 3.4.5, 4.14): the undefined instruction space
+	// (cond 011 x..x 1 xxxx), and the coprocessor instructions (CDP, MRC/MCR,
+	// LDC/STC), which no coprocessor accepts in the 3DO. Other codes that are
+	// not defined do not trap (datasheet 4.1) and are left as they were.
+	function bit UndefTrap(input [31:0] IC);
+		return (IC[27:25] == 3'b011 && IC[4]) || (IC[27:26] == 2'b11 && IC[25:24] != 2'b11);
+	endfunction
+
+	// Game Bub port: an instruction that takes the undefined instruction trap
+	// reaches Decode as an SWI with its condition (ARM6_CORE puts it in EX_IC in
+	// its place): R14 gets its address plus 4, as for the trap; the core selects
+	// Undefined mode, SPSR_und and vector 0x04. They used to run as no operations.
 	function DecInstr_t Decode(input [31:0] IC, input [4:0] STATE, PSR_t PSR, input [3:0] BLOCK_RD, input [3:0] BLOCK_WN, input BLOCK_WE, input BLOCK_LAST, input MUL_LAST);
 		CycleOp_t CYC;
-		DecInstr_t DECI; 
-		bit [3:0] Rn, Rm, Rs, Rd; 
+		DecInstr_t DECI;
+		bit [3:0] Rn, Rm, Rs, Rd;
 
 		CYC = CYC_NO_OP;
 		
@@ -259,7 +272,8 @@ package ARM6_PKG;
 				DECI.LST = 1;
 			end
 			
-			12'b00010x10_xxx0: begin 	//MSR PSR,Rm
+			12'b00010x10_xxx0,          //MSR PSR,Rm
+			12'b00110x10_xxxx: begin 	//MSR PSR_flg,#imm (Game Bub port: was not decoded)
 				CYC = CYC_PSR_WRITE;
 				DECI.PCU = 1;
 				DECI.LST = 1;
@@ -418,12 +432,6 @@ package ARM6_PKG;
 				endcase
 			end
 			
-			12'b1110xxxx_xxx0: begin //CDP 
-				CYC = CYC_NO_OP;
-				DECI.PCU = 1;
-				DECI.LST = 1;
-			end
-			
 			12'b1111xxxx_xxxx: begin //SWI #offset
 				case (STATE)
 				5'd0: begin
@@ -509,7 +517,8 @@ package ARM6_PKG;
 			end
 				
 			CYC_PSR_WRITE: begin
-				DECI.DPCTL = {1'b0, 1'b0, IMM_DAT, IC[25] ? SHFT_ROT : IC[4] ? SHFT_REG : SHFT_CONST, MUL_NOP, 1'b0, 1'b1};
+				// Game Bub port: the immediate form (I=1) takes the rotated 8 bit immediate
+				DECI.DPCTL = {1'b0, IC[25], IC[25] ? IMM_U8 : IMM_DAT, IC[25] ? SHFT_ROT : IC[4] ? SHFT_REG : SHFT_CONST, MUL_NOP, 1'b0, 1'b1};
 				DECI.ALU = {ALUT_B, 4'b0000};
 				DECI.RCTL = {4'd0, Rm, Rd, 1'b1, 1'b0, 1'b0, 1'b0, 1'b0};
 				DECI.PSRCTL = PSRC_ALU;
@@ -576,7 +585,9 @@ package ARM6_PKG;
 				DECI.ALU = {ALUT_ADD, {3'b000,~IC[23]}};
 				DECI.RCTL = {4'd0, BLOCK_RD, Rn, 1'b0, IC[21], 1'b0, 1'b1, 1'b0};
 				DECI.MCTL = {!BLOCK_LAST ? ADR_INC : ADR_PC, 1'b0, 1'b1, 1'b0};
-				DECI.PSRCTL = IC[22] && !IC[15] ? PSRC_USR : PSRC_NOP;
+				// Game Bub port: STM with the S bit stores the User bank registers whether
+				// or not R15 is in the list (only LDM gives R15 in the list another meaning)
+				DECI.PSRCTL = IC[22] ? PSRC_USR : PSRC_NOP;
 			end
 			
 			CYC_BLOCK_LOAD: begin
@@ -654,6 +665,9 @@ package ARM6_PKG;
 		{cl3,tmp3,cr3} = !sa[3]   ? { cl2, tmp2,  cr2} : (dir ? { 1'b0, tmp2[ 7: 0]&{ 8{rot}}|{ 8{tmp2[31]}}&{ 8{arith}}, tmp2[31: 8], tmp2[ 7]} : {tmp2[24], tmp2[23:0], { 8{1'b0}}, 1'b0 });
 		{cl4,tmp4,cr4} = !sa[4]   ? { cl3, tmp3,  cr3} : (dir ? { 1'b0, tmp3[15: 0]&{16{rot}}|{16{tmp3[31]}}&{16{arith}}, tmp3[31:16], tmp3[15]} : {tmp3[16], tmp3[15:0], {16{1'b0}}, 1'b0 });
 		{cl5,tmp5,cr5} = !sa[7:5] ? { cl4, tmp4,  cr4} : (dir ? { 1'b0, tmp4[31: 0]&{32{rot}}|{32{tmp4[31]}}&{32{arith}},              tmp4[31]} : {tmp4[ 0],             {32{1'b0}}, 1'b0 });
+		// Game Bub port: LSL and LSR by more than 32 give carry out 0 (ARM60 datasheet
+		// 4.4.2); by 64, 96 ... the stages above had not shifted at all
+		if (!rot && !arith && sa > 8'd32) {cl5,cr5} = 2'b00;
 		return rrx ? {val[0],ci,val[31:1]} : {dir?cr5:cl5,tmp5};
 	endfunction
 	

@@ -45,6 +45,10 @@ module MADAM
 	output     [ 3: 0] LCODE,
 	output     [23: 2] RA,
 	output             RRAS0_N,
+	output     [23: 2] LA_COL,       // the memory bus for ddram.sv (MADAM_AG)
+	output             LRAS0_COL_N,
+	output     [23: 2] RA_COL,
+	output             RRAS0_COL_N,
 	output             RRAS2_N,
 	output             RRAS3_N,
 	output             RCAS_N,
@@ -78,6 +82,10 @@ module MADAM
 	output             SYSRAM_EN,
 	
 	output             FIELD,
+	
+	// the VRAM access in progress is the CPU's SPORT access (vram.sv: the
+	// CPU's transfers have a serial register of their own)
+	output             VRAM_SP_CPU,
 	
 	input              DBG_SPR_EN,
 	input      [ 7: 0] DBG_EXT
@@ -173,6 +181,7 @@ module MADAM
 	bit          VIDMID_REQ;
 	bit          VIDMID_CURR,VIDMID_FIRST;
 	bit          VIDOUT_ACK;
+	bit          VIDMID_ACK;
 	AddrGenCtl_t SPORT_AG_CTL;
 	bit          SPORT_GRANT;
 	bit          SPORT_LINE0;
@@ -336,7 +345,11 @@ module MADAM
 				end
 			endcase
 			
-			MATH_RES = ($signed(MATH_M) * $signed(MATH_V)) + (MATH_CALC_ROW_START ? '0 : $signed(MATH_ACC));
+			// A signed zero. With the unsigned '0 the
+			// conditional, and so the whole 64-bit expression, was unsigned:
+			// the factors were zero-extended, -0.5 * 0.5 gave 7FFFC000
+			// instead of FFFFC000 (IEEE 1800-2017 11.8.1).
+			MATH_RES = ($signed(MATH_M) * $signed(MATH_V)) + (MATH_CALC_ROW_START ? 64'sd0 : $signed(MATH_ACC));
 			{MATH_RES_DONE} <= '0;
 			if (MATH_STEP) begin
 				MATH_ACC <= MATH_RES;
@@ -351,7 +364,7 @@ module MADAM
 //	wire         MATH_VECTOR_BANK = 0;//MATH_CTRL[4];
 	
 	wire         MATRIX_WE = REG_MATRIX_SEL && A[7:0] <= 8'h3F && nRW && MCLK_PH2;
-	wire [ 3: 0] MATRIX_RA = {MATH_MROW,MATH_MCOL};
+	wire [ 3: 0] MATRIX_RA = MATH_ON ? {MATH_MROW,MATH_MCOL} : A[5:2];   // the engine, else the CPU's read
 	bit  [31: 0] MATRIX_DO;
 	MADAM_MATH_MATRIX MATH_MATRIX (.CLK(CLK), .WA(A[5:2]), .DIN(CPU_DI), .WE(MATRIX_WE & CE_R), .RA(MATRIX_RA), .DOUT(MATRIX_DO));
 	
@@ -410,28 +423,14 @@ module MADAM
 			REG_DO <= '0;
 	end
 	
-	bit  [23: 0] DRAM0_END,DRAM1_START,DRAM1_END,VRAM_START,VRAM_END;
-	always_comb begin
-		case (MSYS[4:3])
-			2'b00: begin DRAM0_END = 24'h000000; DRAM1_START = 24'h000000; end
-			2'b01: begin DRAM0_END = 24'h0FFFFF; DRAM1_START = 24'h100000; end
-			2'b10: begin DRAM0_END = 24'h3FFFFF; DRAM1_START = 24'h400000; end
-			2'b11: begin DRAM0_END = 24'hDFFFFF; DRAM1_START = 24'hE00000; end//??
-		endcase
-		case (MSYS[6:5])
-			2'b00: begin DRAM1_END = DRAM1_START + 24'h000000; VRAM_START = DRAM1_START + 24'h000000; end
-			2'b01: begin DRAM1_END = DRAM1_START + 24'h0FFFFF; VRAM_START = DRAM1_START + 24'h100000; end
-			2'b10,
-			2'b11: begin DRAM1_END = DRAM1_START + 24'h3FFFFF; VRAM_START = DRAM1_START + 24'h400000; end
-		endcase
-		VRAM_END = VRAM_START + 24'h100000;
-	end
-	wire CPU_DRAM0_SEL = (A[31:24] == 8'h00 && A[23:0] >= 32'h00000000 && A[23:0] <= DRAM0_END && |MSYS[4:3] && !BOOT_ROM);
-	wire CPU_DRAM1_SEL = (A[31:24] == 8'h00 && A[23:0] >= DRAM1_START  && A[23:0] <= DRAM1_END && |MSYS[6:5] && !BOOT_ROM);
-	wire CPU_VRAM_SEL  = (A[31:24] == 8'h00 && A[23:0] >= VRAM_START   && A[23:0] <= VRAM_END              );
+	wire [ 2: 0] CPU_MEM_SEL = MemRegionSel(MSYS[6:0], A[23:20]);
+	wire CPU_DRAM0_SEL = (A[31:24] == 8'h00 && CPU_MEM_SEL[0] && |MSYS[4:3] && !BOOT_ROM);
+	wire CPU_DRAM1_SEL = (A[31:24] == 8'h00 && CPU_MEM_SEL[1] && |MSYS[6:5] && !BOOT_ROM);
+	wire CPU_VRAM_SEL  = (A[31:24] == 8'h00 && CPU_MEM_SEL[2]);
 	wire CPU_CLIO_SEL = (A[31:20] == 12'h034);
 	wire CPU_SLOW_SEL = (A[31:20] == 12'h030 || A[31:20] == 12'h031 || (A[31:20] == 12'h000 && BOOT_ROM));
 	wire CPU_SPORT_SEL = (A[31:20] == 12'h032 && CPU_GRANT);
+	assign VRAM_SP_CPU = CPU_SPORT_SEL;
 	
 	MADAM_ARB ARB
 	(
@@ -475,6 +474,7 @@ module MADAM
 		.CLUTWR_ACK(CLUTWR_ACK),
 		.VIDOUT_REQ(VIDOUT_REQ),
 		.VIDOUT_ACK(VIDOUT_ACK),
+		.VIDMID_ACK(VIDMID_ACK),
 		.VIDMID_REQ(VIDMID_REQ),
 		.VIDMID_CURR(VIDMID_CURR),
 		.VIDMID_FIRST(VIDMID_FIRST),
@@ -657,6 +657,10 @@ module MADAM
 		.LCODE(LCODE),
 		.RA(RA),
 		.RRAS0_N(RRAS0_N),
+		.LA_COL(LA_COL),
+		.LRAS0_COL_N(LRAS0_COL_N),
+		.RA_COL(RA_COL),
+		.RRAS0_COL_N(RRAS0_COL_N),
 		.RRAS2_N(RRAS2_N),
 		.RRAS3_N(RRAS3_N),
 		.RCAS_N(RCAS_N),
@@ -747,6 +751,7 @@ module MADAM
 		.VIDMID_CURR(VIDMID_CURR),
 		.VIDMID_FIRST(VIDMID_FIRST),
 		.VIDOUT_ACK(VIDOUT_ACK),
+		.VIDMID_ACK(VIDMID_ACK),
 		
 		.VCE(VCE),
 		.PCSC(PCSC),

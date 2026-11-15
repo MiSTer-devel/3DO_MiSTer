@@ -35,6 +35,10 @@ module P3DO
 	output     [ 3: 0] LCODE,
 	output     [23: 2] RA,
 	output             RRAS0_N,
+	output     [23: 2] LA_COL,       // the memory bus for ddram.sv (MADAM_AG)
+	output             LRAS0_COL_N,
+	output     [23: 2] RA_COL,
+	output             RRAS0_COL_N,
 	output             RRAS2_N,
 	output             RRAS3_N,
 	output             RCAS_N,
@@ -77,6 +81,9 @@ module P3DO
 	input      [31: 0] S,
 	
 	output             FIELD,
+	
+	// the VRAM access in progress is the CPU's SPORT access (vram.sv)
+	output             VRAM_SP_CPU,
 
 	input              VCLK,
 	output     [23: 0] RGB,
@@ -273,6 +280,10 @@ module P3DO
 		.LCODE(LCODE),
 		.RA(RA),
 		.RRAS0_N(RRAS0_N),
+		.LA_COL(LA_COL),
+		.LRAS0_COL_N(LRAS0_COL_N),
+		.RA_COL(RA_COL),
+		.RRAS0_COL_N(RRAS0_COL_N),
 		.RRAS2_N(RRAS2_N),
 		.RRAS3_N(RRAS3_N),
 		.RCAS_N(RCAS_N),
@@ -310,6 +321,8 @@ module P3DO
 		.SYSRAM_EN(MADAM_SYSRAM_EN),
 		
 		.FIELD(FIELD),
+		
+		.VRAM_SP_CPU(VRAM_SP_CPU),
 		
 		.DBG_SPR_EN(SCRN_EN[1]),
 		.DBG_EXT(DBG_EXT)

@@ -118,11 +118,17 @@ module MADAM_EXTPIF
 	
 	bit          BLOCK_END,BLOCK_CONTINUE;
 	bit          BLOCK_AND_LEN_END;
+	bit          NEXT_ZERO;
+	// LOOP2 reads the next starting address (AG_MDTO = the stack value read in
+	// LOOP1). Zero means no loop: the transfer is complete (WO 94/10641, loop
+	// test; "DMA operation is not allowed to be pointed at ... address zero")
+	wire         LOOP_NEXT_ZERO = ~|MDTI[23:2];
 	always @(posedge CLK or negedge RST_N) begin		
 		
 		if (!RST_N) begin
 			{BLOCK_END,BLOCK_CONTINUE} <= '0;
 			BLOCK_AND_LEN_END <= 0;
+			NEXT_ZERO <= 0;
 		end
 		else if (EN && CE_R) begin
 			if (BUS_WRITE || BUS_READ) begin
@@ -131,6 +137,9 @@ module MADAM_EXTPIF
 			end
 			if (BUS_STATE_FF == EXTP_LOOP0 && BLOCK_END) begin
 				BLOCK_AND_LEN_END <= 1;
+			end
+			if (BUS_STATE_FF == EXTP_LOOP2) begin
+				NEXT_ZERO <= LOOP_NEXT_ZERO;
 			end
 			if (BUS_STATE_FF == EXTP_LOOP3) begin
 				BLOCK_END <= 0;
@@ -151,11 +160,14 @@ module MADAM_EXTPIF
 			if ((BUS_READ || BUS_WRITE) && !AG_PBI && !DMA_REG_OVF && !BURST_LAST) begin
 				CCODE <= 3'h2;
 			end
-			if (BUS_STATE_FF == EXTP_LOOP2 && !BLOCK_CONTINUE) begin
+			if (BUS_STATE_FF == EXTP_LOOP2 && (!BLOCK_CONTINUE || LOOP_NEXT_ZERO)) begin
 				CCODE <= 3'h7;
 			end
+			// the info code after 7: 2 = burst end, 3 = the length ran out and
+			// the channel loops (interrupt), 4 = it ran out with no next buffer:
+			// the transfer is complete (interrupt, CLIO stops requesting)
 			if (BUS_STATE_FF == EXTP_LOOP3) begin
-				CCODE <= BLOCK_AND_LEN_END ?  3'h3 : 3'h2;//TODO
+				CCODE <= !BLOCK_AND_LEN_END ? 3'h2 : NEXT_ZERO ? 3'h4 : 3'h3;
 			end
 		end
 //		else if (PLAYER_INT) begin
@@ -289,7 +301,7 @@ module MADAM_EXTPIF
 				AG_CTL.DMA_REG_WRITE_EN = BLOCK_END;
 				AG_CTL.DMA_ADDR_SEL = 1;
 				AG_CTL.DMA_ADDER_CTL = 4'b0000;
-				NEXT = {BLOCK_CONTINUE,1'b0,DMA_DIR};
+				NEXT = {BLOCK_CONTINUE && !LOOP_NEXT_ZERO,1'b0,DMA_DIR};
 			end
 			
 			EXTP_LOOP3: begin

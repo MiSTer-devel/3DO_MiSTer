@@ -58,7 +58,12 @@ module CLIO_CLUT
 	end 
 	wire [ 6: 0] CRADDR = BG_SWITCH ? {1'b1,1'b0,5'b00001} : {1'b0,1'b1,ADDR};
 	
-	wire [ 6: 0] LWADDR = SCAP[29] ? {1'b1,1'b0,5'b00001} : {1'b0,1'b1,SCAP[28:24]};
+	// Game Bub port: the background entry for the background word (111 in
+	// bits 31-29) only. In a colour word (bit 31 = 0) bits 30-29 select the
+	// components (SDK VDLColorEntry: 00 all, 01 blue, 10 green, 11 red); the
+	// original took bit 29 for the background, so blue- and red-only writes
+	// went to the background entry.
+	wire [ 6: 0] LWADDR = SCAP[31:29] == 3'b111 ? {1'b1,1'b0,5'b00001} : {1'b0,1'b1,SCAP[28:24]};
 	wire [ 6: 0] CWADDR = BG_SWITCH ? {1'b1,1'b0,5'b00000} : {1'b0,1'b0,ADDR};
 	wire         RWE = (SCAP[31:29] == 3'b000 || SCAP[31:29] == 3'b011 || SCAP[31:24] == 8'hE0);
 	wire         GWE = (SCAP[31:29] == 3'b000 || SCAP[31:29] == 3'b010 || SCAP[31:24] == 8'hE0);

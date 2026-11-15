@@ -22,7 +22,7 @@ module VE
 	
 	input      [ 7: 0] DBG_EXT,
 	input              DBG_BORD_DIS,
-	output     [ 9: 0] DBG_HS_START,DBG_HS_END
+	output reg     [ 9: 0] DBG_HS_START,DBG_HS_END
 );
 
 	bit  [ 1: 0] VRST_SYNC;
@@ -51,7 +51,12 @@ module VE
 	bit          VBLK;
 	always @(posedge VCLK) begin		
 		if (VRST) begin
+			// outputs idle in reset: no dot clock, blanking (the capture to the
+			// framework keeps running and took a held DCLK = 1 for a dot every clock)
 			DCLK_DIV <= '0;
+			DCLK <= 0;
+			{HBLK,VBLK} <= '1;
+			{HBLK_N,VBLK_N} <= '0;
 			{HSTART,VSTART} <= '0;
 			LINE_BUF_RPOS <= '0;
 			HCNT <= '0;
@@ -139,6 +144,7 @@ module VE
 	
 		if (!RST_N) begin
 			LINE_BUF_WPOS <= '0;
+			{HCNT_RES,VCNT_RES,DOT_CE,EMPTY_LINE,EMPTY_DE} <= '0;
 			HCNT2 <= '0;
 			VCNT2 <= '0;
 			HSYNC2 <= 1;
