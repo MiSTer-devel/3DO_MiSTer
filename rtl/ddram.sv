@@ -22,23 +22,25 @@ module ddram
 	output         io_busy,
 	
 	input  [14: 1] nvram_addr,
-	output [15: 0] nvram_dout,
+	output reg [15: 0] nvram_dout,
 	input  [15: 0] nvram_din,
 	input          nvram_rd,
 	input          nvram_wr,
-	output         nvram_busy,
+	output reg         nvram_busy,
 
 	input          sclk,
 	input  [19: 2] laddr,
 	input  [15: 0] ldin,
-	output [15: 0] ldout,
+	output reg [15: 0] ldout,
 	input          lras,
+	input          lras_d,   // lras at the clock before (the previous clk_sys edge)
 	input  [ 1: 0] lwe,
 	input          lrd,
 	input  [19: 2] raddr,
 	input  [15: 0] rdin,
-	output [15: 0] rdout,
+	output reg [15: 0] rdout,
 	input          rras,
+	input          rras_d,
 	input  [ 1: 0] rwe,
 	input          rrd,
 	output         busy,
@@ -50,11 +52,11 @@ module ddram
 	input          brwr,
 	input          brrd,
 	input          bfw,
-	output [ 9: 2] ba,
+	output reg [ 9: 2] ba,
 	input  [63: 0] bin,
 	output [63: 0] bout,
-	output         blte,
-	output         brte,
+	output reg         blte,
+	output reg         brte,
 	output         bbusy
 );
 
@@ -82,6 +84,12 @@ module ddram
 	reg  [ 15:  0] write_ldata,write_rdata;
 	reg  [  7:  0] write_lbe,write_rbe;
 	reg  [ 19:  2] read_laddr = '1,read_raddr = '1;
+	// Game Bub port: the random-read blocks are valid only until a write
+	// burst (page copy, write transfer, masked flash write) or a lazy flash
+	// write could have changed their rows; read_*addr alone kept serving
+	// a block from before such a write (a translucent cel or the CPU read
+	// the old frame buffer pixels after a SPORT clear or copy)
+	reg            read_lval,read_rval;     // cleared by rst
 	reg            read_lact,read_ract;
 	reg  [  3:  0] lcache_wren,rcache_wren;
 	reg            lcache_load,rcache_load;
@@ -107,12 +115,24 @@ module ddram
 	
 	reg  [ 19:  3] vram_fw_baddr;
 	reg            vram_fw_brd,vram_fw_bwr;
-	wire [ 19:  3] vram_fw_raddr1 = rwe || rrd ? raddr[19:3] : laddr[19:3];
+	// Game Bub port: while a random write waits to be issued, look up the
+	// flash-write flag and row colour of the address it writes. The original
+	// used the address on the bus, which is MADAM's next access once the
+	// write has been held up (SDRAM busy): the word was then completed with
+	// the wrong flag, so the flash colour overwrote neighbouring pixels.
+	// The bus address is not looked up at all any more: a write is issued
+	// only once the lookup is for its own latched address (vram_fw_qaddr),
+	// and reads look up their burst address. That keeps MADAM's address bus
+	// (clk_sys) out of this clk_mem RAM's address path.
+	wire [ 19:  3] vram_fw_raddr1 = write_lpend ? write_laddr[19:3] : write_raddr[19:3];
+	wire [ 19:  3] vram_fw_addr1 = vram_fw_brd || vram_fw_bwr ? vram_fw_baddr : vram_fw_raddr1;
+	reg  [ 19:  3] vram_fw_qaddr;   // address the flag/colour outputs now belong to
+	always @(posedge clk) vram_fw_qaddr <= vram_fw_addr1;
 	wire           vram_fw_q1;
 	VRAM_FW #(18) vram_fw
 	(
 		.CLK1(clk),
-		.ADDR1(vram_fw_brd || vram_fw_bwr ? vram_fw_baddr : vram_fw_raddr1),
+		.ADDR1(vram_fw_addr1),
 		.DATA1(1'b0),
 		.WREN1(vram_fw_bwr),
 		.Q1(vram_fw_q1),
@@ -132,14 +152,14 @@ module ddram
 		.WADDR(bladdr[19:11]),
 		.DATA(bin[31:0]),
 		.WREN(bfw),
-		.RADDR(vram_fw_brd || vram_fw_bwr ? vram_fw_baddr[19:11] : vram_fw_raddr1[19:11]),
+		.RADDR(vram_fw_addr1[19:11]),
 		.Q(vram_fw_data)
 	);
 	
 	always @(posedge clk) begin
 		bit old_io_rd, old_io_we,old_nvram_rd,old_nvram_wr;
 		bit old_blrd, old_blwr, old_brrd, old_brwr;
-		bit old_lras, old_lrd, old_lwe, old_rras, old_rrd, old_rwe;
+		bit old_lrd, old_lwe, old_rrd, old_rwe;
 		bit old_rst;
 		bit read_lpend,read_rpend;
 		bit write_lprepend,write_rprepend;
@@ -150,7 +170,6 @@ module ddram
 		
 		old_blwr <= blwr; old_brwr <= brwr;
 		old_blrd <= blrd; old_brrd <= brrd;
-		old_lras <= lras; old_rras <= rras;
 		old_lrd <= lrd; old_rrd <= rrd;
 		old_lwe <= |lwe; old_rwe <= |rwe;
 		old_rst <= rst;
@@ -182,25 +201,34 @@ module ddram
 		
 		if (rst) begin
 			read_lbusy <= 0;
-		end else if (lrd && !old_lrd && lras && old_lras) begin
+		end else if (lrd && !old_lrd && lras && lras_d) begin
 			read_laddr <= laddr;
-			if (read_laddr[19:7] != laddr[19:7]) begin
+			if (!read_lval || read_laddr[19:7] != laddr[19:7]) begin
 				read_lbusy <= 1;
+				read_lval <= 1;
 			end
 		end
 		if (rst) begin
 			read_rbusy <= 0;
-		end else if (rrd && !old_rrd && rras && old_rras) begin
+		end else if (rrd && !old_rrd && rras && rras_d) begin
 			read_raddr <= raddr;
-			if (read_raddr[19:7] != raddr[19:7]) begin
+			if (!read_rval || read_raddr[19:7] != raddr[19:7]) begin
 				read_rbusy <= 1;
+				read_rval <= 1;
 			end
+		end
+		// a write burst starting or a lazy flash write: drop both blocks (the
+		// burst's end drops them again, below, for a block read between its
+		// passes)
+		if (rst || (blwr && !old_blwr) || (brwr && !old_brwr) || bfw) begin
+			read_lval <= 0;
+			read_rval <= 0;
 		end
 		
 		if (rst) begin
 //			write_lprepend <= 0;
 			write_lbusy <= 0;
-		end else if (|lwe && !old_lwe && lras && old_lras) begin
+		end else if (|lwe && !old_lwe && lras && lras_d) begin
 //			write_lprepend <= 1;
 			write_lbusy <= |state | DDRAM_BUSY;
 //		end
@@ -222,7 +250,7 @@ module ddram
 		if (rst) begin
 //			write_rprepend <= 0;
 			write_rbusy <= 0;
-		end else if (|rwe && !old_rwe && rras && old_rras) begin
+		end else if (|rwe && !old_rwe && rras && rras_d) begin
 //			write_rprepend <= 1;
 			write_rbusy <= |state | DDRAM_BUSY;
 //		end
@@ -298,14 +326,27 @@ module ddram
 			ram_read  <= 0;
 			case (state)
 				0: begin
-					if (burst_write_lbusy) begin 
+					// Game Bub port: a write burst is two passes of 128 beats,
+					// one per half-row; wpos[7] says which pass this is, and
+					// the second ends the burst. It is the half-row of the
+					// burst's address (a write transfer starts at column 0 and
+					// the address moves to the second half after the first
+					// pass). The original kept wpos[7] from the previous pass,
+					// whichever half's it was: a left burst started between
+					// the right half's two passes (the halves out of step, a
+					// video transfer on one half when a write transfer comes)
+					// ended after one pass, its VRAM module waited for the
+					// rest for ever (the 3DO stayed paused), and the right
+					// half's second pass was taken as a first one, so a third
+					// ran on into the next row.
+					if (burst_write_lbusy) begin
 						burst_lact <= 1;
 						if (burst_write_rbusy && burst_raddr == burst_laddr) burst_ract <= 1;
 						vram_fw_baddr <= burst_laddr[19:3];
 						vram_fw_bwr <= 1;
 						ram_address <= {8'b00000000,burst_laddr[19:3],2'b00};
 						ram_burst   <= 128;
-						wpos[6:0] <= '0;
+						wpos <= {burst_laddr[10], 7'b0000000};
 						blte <= 1;
 						if (burst_write_rbusy && burst_raddr == burst_laddr) brte <= 1;
 						state       <= 4'd1;
@@ -316,11 +357,11 @@ module ddram
 						vram_fw_bwr <= 1;
 						ram_address <= {8'b00000000,burst_raddr[19:3],2'b00};
 						ram_burst   <= 128;
-						wpos[6:0] <= '0;
+						wpos <= {burst_raddr[10], 7'b0000000};
 						brte <= 1;
 						state       <= 4'd1;
 					end
-					else if (burst_read_lbusy) begin 
+					else if (burst_read_lbusy) begin
 						burst_lact <= 1;
 						if (burst_read_rbusy && burst_raddr == burst_laddr) burst_ract <= 1;
 						vram_fw_baddr <= burst_laddr[19:3];
@@ -332,7 +373,7 @@ module ddram
 						rpos        <= {1'b0,burst_laddr[9:3]};
 						state       <= 4'd2;
 					end
-					else if (burst_read_rbusy) begin 
+					else if (burst_read_rbusy) begin
 						burst_ract <= 1;
 						vram_fw_baddr <= burst_raddr[19:3];
 						vram_fw_brd <= 1;
@@ -343,7 +384,11 @@ module ddram
 						rpos        <= {1'b0,burst_raddr[9:3]};
 						state       <= 4'd2;
 					end
-					else if (write_lpend && write_rpend && write_laddr == write_raddr) begin 
+					else if ((write_lpend || write_rpend) && vram_fw_qaddr != (write_lpend ? write_laddr[19:3] : write_raddr[19:3])) begin
+						// Game Bub port: the flag/colour lookup above is not yet for
+						// this write's address (e.g. right after a burst): wait a cycle
+					end
+					else if (write_lpend && write_rpend && write_laddr == write_raddr) begin
 						{write_lpend,write_rpend} <= '0;
 						{write_lbusy,write_rbusy} <= '0;
 						lcache_wren <= !write_lcache_update ? 4'b0000 : {write_lbe[7:6],write_lbe[3:2]};
@@ -468,6 +513,8 @@ module ddram
 					if (wpos == 8'd255) begin
 						if (burst_lact) burst_write_lbusy <= 0;
 						if (burst_ract) burst_write_rbusy <= 0;
+						read_lval <= 0;
+						read_rval <= 0;
 						burst_lact <= 0;
 						burst_ract <= 0;
 						state <= burst_read_lbusy || burst_read_rbusy ? 4'd3 : 4'd4;
@@ -521,12 +568,19 @@ module ddram
 					rpos[4:0] <= rpos[4:0] + 5'd2;
 					if (rpos[4:0] == 5'h1E) begin
 						vram_fw_brd <= 0;
-						if (read_lact) read_lbusy <= 0;
-						if (read_ract) read_rbusy <= 0;
-						read_lact <= 0;
-						read_ract <= 0;
-						state <= 4'd0;
+						state <= 4'd12;
 					end
+				end
+				
+				// the block's last words go into the block cache a clock later
+				// (lc_load below): the read is over, and the next access starts,
+				// a clock later too
+				4'd12: begin
+					if (read_lact) read_lbusy <= 0;
+					if (read_ract) read_rbusy <= 0;
+					read_lact <= 0;
+					read_ract <= 0;
+					state <= 4'd0;
 				end
 				
 				4'd8: begin
@@ -558,8 +612,21 @@ module ddram
 	wire [ 63:  0] dout = vram_fw_q1 ? {2{vram_fw_data}} : dout_buf;
 	
 	wire [ 31:  0] lcache_q,rcache_q;
-	ddr_cache_ram #(4) lcache (clk, lcache_load ? lrcache_addr : write_laddr[6:3], lcache_load ? {dout[63:48],dout[31:16]} : {2{write_ldata}}, ({4{lcache_load}} | lcache_wren), read_laddr[6:3], lcache_q);
-	ddr_cache_ram #(4) rcache (clk, rcache_load ? lrcache_addr : write_raddr[6:3], rcache_load ? {dout[47:32],dout[15:00]} : {2{write_rdata}}, ({4{rcache_load}} | rcache_wren), read_raddr[6:3], rcache_q);
+	// The words read for the block cache go through a register into it (they
+	// went from the flash-flag RAM's output through the colour select straight
+	// into the cache's write port).
+	reg  [ 31:  0] lc_data,rc_data;
+	reg            lc_load,rc_load;
+	reg  [  3:  0] lrc_addr;
+	always @(posedge clk) begin
+		lc_data <= {dout[63:48],dout[31:16]};
+		rc_data <= {dout[47:32],dout[15:00]};
+		lc_load <= lcache_load;
+		rc_load <= rcache_load;
+		lrc_addr <= lrcache_addr;
+	end
+	ddr_cache_ram #(4) lcache (clk, lc_load ? lrc_addr : write_laddr[6:3], lc_load ? lc_data : {2{write_ldata}}, ({4{lc_load}} | lcache_wren), read_laddr[6:3], lcache_q);
+	ddr_cache_ram #(4) rcache (clk, rc_load ? lrc_addr : write_raddr[6:3], rc_load ? rc_data : {2{write_rdata}}, ({4{rc_load}} | rcache_wren), read_raddr[6:3], rcache_q);
 
 	always_comb begin
 		case (read_laddr[2])
@@ -575,7 +642,12 @@ module ddram
 	
 	
 	assign bout = dout;
-	assign busy = write_lbusy | write_rbusy | read_lbusy | read_rbusy;
+	// Game Bub port: a write that has not been issued yet keeps MADAM paused.
+	// write_*busy only reflects whether ddram.sv was busy when the write was
+	// latched; if a burst (served first) started right after, the write
+	// waited without a pause and the next CEL-engine write (one per MCLK)
+	// replaced it.
+	assign busy = write_lbusy | write_rbusy | write_lpend | write_rpend | read_lbusy | read_rbusy;
 	assign bbusy = burst_read_lbusy | burst_read_rbusy | burst_write_lbusy | burst_write_rbusy;
 	
 	assign io_dout = io_rbuf;

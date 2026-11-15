@@ -3,6 +3,8 @@
 `define DEBUG
 // synopsys translate_on
 
+import P3DO_PKG::*;
+
 module CLIO_VIDEO
 (
 	input              CLK,
@@ -164,6 +166,16 @@ module CLIO_VIDEO
 		end
 	end 
 	wire CAPCLKEN_N = LSCAP_N & RSCAP_N;
+	// a VDL word: both ports captured together (lines up with CAPEND1_N and SCAP).
+	// It writes the palette wherever it falls: MADAM starts a pending download
+	// at any time from HCOUNT 1339 on (MADAM_SPORT), so a late one ran past the
+	// end of the WRITE_EN window and lost its last entries (a fade left entries
+	// 24-31 and the background at their old colours). Pixels never write it.
+	bit          CLUT_CAP;
+	always @(posedge CLK or negedge RST_N) begin
+		if (!RST_N) CLUT_CAP <= 0;
+		else if (EN && VCE) CLUT_CAP <= ~LSCAP_N & ~RSCAP_N;
+	end
 	
 	bit  [15: 0] LSCAP_BUF;
 	bit  [15: 0] RSCAP_BUF;
@@ -197,26 +209,52 @@ module CLIO_VIDEO
 	end 
 	
 //	bit  [ 9: 0] AMYCTL;
+	// Game Bub port: in the display control word, 11 in a 2-bit source
+	// field (vertical and horizontal subposition source, blue pen LSB source,
+	// for the line and for the window) means "maintain prior setting" (US
+	// patent 5,502,462 Table 6; the SDK's VDL_*_NOP). The original stored 11
+	// as a setting of its own.
+	// Game Bub port: COLONLY ("Colors Only after this point. Ignore optional
+	// download words that are other than color-defining words", US patent
+	// 5,502,462 Table 6 bit 1) locks out further display control words for
+	// the rest of the VDL entry's download, i.e. until the next CLUT download
+	// window (WRITE_EN) opens (the Opera emulator: per VDL entry). The
+	// original kept loading them.
 	DispCtrl_t   DISPCTL;
+	bit          COLONLY_LOCK;
 	always @(posedge CLK or negedge RST_N) begin
 		bit          LOAD;
-		
+		bit          WRITE_EN_OLD;
+		DispCtrl_t   W;
+
 		if (!RST_N) begin
 //			AMYCTL <= '0;
 			DISPCTL <= '0;
+			COLONLY_LOCK <= 0;
+			WRITE_EN_OLD <= 0;
 		end
 		else if (EN && VCE) begin
 			LOAD <= ~LSCAP_N & ~RSCAP_N;
+			WRITE_EN_OLD <= WRITE_EN;
+			if (WRITE_EN && !WRITE_EN_OLD) COLONLY_LOCK <= 0;
 			if (LOAD && !CAPEND1_N) begin
 				if (!SCAP[30] && SCAP[31]) begin
 //					AMYCTL <= SCAP[9:0];
 				end
-				if (!SCAP[29] && SCAP[30] && SCAP[31]) begin
-					DISPCTL <= SCAP[28:0];
+				if (!SCAP[29] && SCAP[30] && SCAP[31] && !COLONLY_LOCK) begin
+					W = SCAP[28:0];
+					if (W.VSUB  == 2'b11) W.VSUB  = DISPCTL.VSUB;
+					if (W.HSUB  == 2'b11) W.HSUB  = DISPCTL.HSUB;
+					if (W.BLSB  == 2'b11) W.BLSB  = DISPCTL.BLSB;
+					if (W.WVSUB == 2'b11) W.WVSUB = DISPCTL.WVSUB;
+					if (W.WHSUB == 2'b11) W.WHSUB = DISPCTL.WHSUB;
+					if (W.WBLSB == 2'b11) W.WBLSB = DISPCTL.WBLSB;
+					DISPCTL <= W;
+					if (W.COLONLY) COLONLY_LOCK <= 1;
 				end
 			end
 		end
-	end 
+	end
 	
 	bit  [15: 0] INPUT;
 	always_comb begin
@@ -227,12 +265,18 @@ module CLIO_VIDEO
 			1'b1: TEMP = LSCAP_BUF;
 			1'b0: TEMP = RSCAP_BUF;
 		endcase
+		// Game Bub port: display control word bit 10 (SwapPENms, SDK
+		// swapPenVH) swaps the pen halfword's MSB and LSB before CLIO
+		// interprets it (US patent 5,502,462 Table 6); the original ignored it
+		if (DISPCTL.SWAPHV) TEMP = {TEMP[0],TEMP[14:1],TEMP[15]};
 		
+		// SDK: VDL_BLSB_ZERO, _GREEN (green LSB, bit 5), _BLUE (bit 0); 11
+		// (NOP) keeps the prior setting and is never stored
 		case (DISPCTL.BLSB)
 			2'b00: B0 = 0;
 			2'b01: B0 = TEMP[5];
 			2'b10: B0 = TEMP[0];
-			2'b11: B0 = TEMP[0];//??
+			2'b11: B0 = TEMP[0];
 		endcase
 		INPUT = {TEMP[15:1],B0};
 //		LSB = TEMP[0]&DISPCTL[4];
@@ -313,10 +357,10 @@ module CLIO_VIDEO
 		.INPUT(INPUT ^ {1'b0,{15{DBG_HL_DOT}}}),
 		
 		.SCAP(SCAP),
-		.WRITE(~CAPEND1_N),
+		.WRITE(CLUT_CAP),
 		.READCLKEN(~CAPEND2_N),
 		.COPY_EN(COPY_EN),
-		.WRITE_EN(WRITE_EN),
+		.WRITE_EN(WRITE_EN | CLUT_CAP),
 		.CURR_PREV(CURR_PREV),
 //		.BG_CTL(DISPCTL[29]),
 		.BG_DET(BG_DET),
@@ -324,21 +368,39 @@ module CLIO_VIDEO
 		.OUTPUT(CLUT_OUTPUT)
 	);
 	
+	// Game Bub port: CLUT bypass (pen MSB set). The 5-bit components fill the
+	// 5 MSBs of the 8-bit outputs; their 3 LSBs are zero, the 3 MSBs again
+	// with MSBREP, or a pseudo-random value with RNDM (US patent 6,191,772;
+	// SDK VDLDisplayCtlWord bits 11 and 12). The original took each
+	// component's own 3 LSBs. The console's random generator is not
+	// documented: here a 15-bit LFSR, one 3-bit value per pixel for all three
+	// components ("a 3-bit value"), RNDM taking precedence over MSBREP.
 	bit  [23: 0] BYPASS_OUTPUT;
 	bit          BYPASS_EN;
+	bit  [14: 0] BYPASS_RND;
 	always @(posedge CLK or negedge RST_N) begin
+		bit  [ 2: 0] LR,LG,LB;
+
 		if (!RST_N) begin
 			BYPASS_OUTPUT <= '0;
 			BYPASS_EN <= 0;
+			BYPASS_RND <= 15'h0001;
 		end
 		else if (EN && VCE) begin
 			if (!CAPEND2_N) begin
+				BYPASS_RND <= {BYPASS_RND[13:0], BYPASS_RND[14] ^ BYPASS_RND[13]};
+				if (DISPCTL.RNDM) begin
+					{LR,LG,LB} = {3{BYPASS_RND[2:0]}};
+				end else if (DISPCTL.MSBREP) begin
+					{LR,LG,LB} = {INPUT[14:12],INPUT[9:7],INPUT[4:2]};
+				end else begin
+					{LR,LG,LB} = '0;
+				end
 				BYPASS_EN <= (DISPCTL.BYPASS && INPUT[15]) /*|| DISPCTL[12]*/;
-				BYPASS_OUTPUT <= {INPUT[14:10],INPUT[12:10],INPUT[9:5],INPUT[7:5],INPUT[4:0],INPUT[2:0]};
-//				BYPASS_OUTPUT <= {INPUT[14:10],INPUT[14:12],INPUT[9:5],INPUT[9:7],INPUT[4:0],INPUT[4:2]};
+				BYPASS_OUTPUT <= {INPUT[14:10],LR,INPUT[9:5],LG,INPUT[4:0],LB};
 			end
 		end
-	end 
+	end
 	
 	bit [23: 0] RGB;
 	always @(posedge CLK or negedge RST_N) begin
@@ -351,20 +413,16 @@ module CLIO_VIDEO
 		end
 	end 
 	
-	bit          CAPEND5_N,CAPEND6_N,CAPEND7_N,CAPEND8_N,CAPEND9_N;
-	always @(posedge CLK or negedge RST_N) begin		
-		if (!RST_N) begin
-			{CAPEND5_N,CAPEND6_N,CAPEND7_N,CAPEND8_N,CAPEND9_N} <= '1;
-		end
-		else if (EN && VCE) begin
-			CAPEND5_N <= CAPEND4_N;
-			CAPEND6_N <= CAPEND5_N;
-			CAPEND7_N <= CAPEND6_N;
-			CAPEND8_N <= CAPEND7_N;
-			CAPEND9_N <= CAPEND8_N;
-		end
-	end 
-	
+	// Pixel captures: one serial port at a time, inside the line's read window.
+	// A VDL download captures both ports together in the horizontal blanking
+	// (US 5,502,462); it is decoded above and is not picture data, so it must
+	// not clock the destacker or the line buffer (a late one ran into the next
+	// line's first dots). VIDEO_CAP[k] lines up with CAPEND(k+1)_N.
+	bit  [ 8: 0] VIDEO_CAP;
+	always @(posedge CLK or negedge RST_N) begin
+		if (!RST_N) VIDEO_CAP <= '0;
+		else if (EN && VCE) VIDEO_CAP <= {VIDEO_CAP[7:0], READ_EN & (LSCAP_N ^ RSCAP_N)};
+	end
 	bit          CAPEN_DIV;
 	always @(posedge CLK or negedge RST_N) begin		
 		if (!RST_N) begin
@@ -373,16 +431,16 @@ module CLIO_VIDEO
 		else if (EN && VCE) begin
 			if (READ_START)
 				CAPEN_DIV <= 0;
-			else if (!CAPEND5_N || !CAPEND7_N)
+			else if (VIDEO_CAP[4] || VIDEO_CAP[6])
 				CAPEN_DIV <= ~CAPEN_DIV;
 		end
 	end 
 	
-	wire PDS_CLK1 = (~CAPEND5_N | ~CAPEND7_N) & ~CAPEN_DIV;
-	wire PDS_CLK2 = (~CAPEND7_N | ~CAPEND9_N) &  CAPEN_DIV;
+	wire PDS_CLK1 = (VIDEO_CAP[4] | VIDEO_CAP[6]) & ~CAPEN_DIV;
+	wire PDS_CLK2 = (VIDEO_CAP[6] | VIDEO_CAP[8]) &  CAPEN_DIV;
 	bit  [23: 0] LP0,LP1,LP2,LP3;
 	bit          PDESTACKER_DE;
-	CLIO_24DESTACKER PDESTACKER(CLK, VCE, EN, READ_START, PDS_CLK1, PDS_CLK2, RGB, ~CAPEND7_N, LP0, LP1, LP2, LP3, PDESTACKER_DE);
+	CLIO_24DESTACKER PDESTACKER(CLK, VCE, EN, READ_START, PDS_CLK1, PDS_CLK2, RGB, VIDEO_CAP[6], LP0, LP1, LP2, LP3, PDESTACKER_DE);
 	
 	wire ION = ~FIRST_LINE;
 	bit  [23: 0] INTERPOL_OUT;

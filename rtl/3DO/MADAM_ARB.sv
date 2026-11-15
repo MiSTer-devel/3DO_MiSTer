@@ -50,6 +50,7 @@ module MADAM_ARB
 	input              VIDMID_CURR,
 	input              VIDMID_FIRST,
 	output reg         VIDOUT_ACK,
+	output reg         VIDMID_ACK,   // Game Bub port: the mid-line request's own acknowledge
 	output reg         SPORT_GRANT,
 	input AddrGenCtl_t SPORT_AG_CTL,
 	
@@ -127,8 +128,13 @@ module MADAM_ARB
 			end
 			
 			if (CLUTWR_ACK && !CLUTWR_REQ) CLUTWR_ACK <= 0;
+			// Game Bub port: the line-start and mid-line requests have an
+			// acknowledge each. With the original shared one, a mid-line grant
+			// while the line-start request was also pending acknowledged both:
+			// MADAM_SPORT dropped the line-start request and the line got no
+			// transfers (the rest of the frame a line behind).
 			if (VIDOUT_ACK && !VIDOUT_REQ) VIDOUT_ACK <= 0;
-			if (VIDOUT_ACK && !VIDMID_REQ) VIDOUT_ACK <= 0;
+			if (VIDMID_ACK && !VIDMID_REQ) VIDMID_ACK <= 0;
 			if (SE_ACK && !SCOBLD_REQ) SE_ACK <= 0;
 			if (SE_ACK && !SPRDATA_REQ) SE_ACK <= 0;
 			if (EXTP_ACK && !EXTP_REQ) EXTP_ACK <= 0;
@@ -142,7 +148,7 @@ module MADAM_ARB
 						CPU_GRANT_INT <= 1;
 					end
 					else if (VIDMID_REQ) begin	//priority 2
-						VIDOUT_ACK <= 1;
+						VIDMID_ACK <= 1;
 						VIDMID_PREV_CURR <= VIDMID_CURR;
 						SPORT_GRANT_INT <= 1;
 						SE_GRANT_INT <= 0;

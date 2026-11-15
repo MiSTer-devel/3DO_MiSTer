@@ -21,6 +21,17 @@ module CLIO_DMA_FIFO (
 	bit  [ 2: 0] WADDR;
 	bit  [ 3: 0] AMOUNT;
 	
+	// Game Bub port: a write is taken unless the FIFO is full and nothing is
+	// read; a read is taken if a word is there or is being written (empty:
+	// the reader gets the incoming word, Q bypass below). The count follows
+	// the words taken. The original advanced the write pointer on a write
+	// to an empty FIFO that was read in the same cycle (a DSP read meeting
+	// a DMA refill) without counting the word, so pointers and count
+	// disagreed from then on (words miscounted or read twice); a full FIFO
+	// read and written lost the count the same way, and a write to a full
+	// FIFO overwrote its oldest word.
+	wire         WR_OK = WRREQ && (!AMOUNT[3] || RDREQ);
+	wire         RD_OK = RDREQ && (AMOUNT != 4'd0 || WRREQ);
 	always @(posedge CLK) begin
 		if (RST) begin
 			AMOUNT <= '0;
@@ -28,18 +39,13 @@ module CLIO_DMA_FIFO (
 			WADDR <= '0;
 		end
 		else if (EN) begin
-			if (WRREQ && !AMOUNT[3]) begin
+			if (WR_OK) begin
 				WADDR <= WADDR + 3'd1;
 			end
-			if (RDREQ && AMOUNT) begin
+			if (RD_OK) begin
 				RADDR <= RADDR + 3'd1;
 			end
-			
-			if (WRREQ && !RDREQ && !AMOUNT[3]) begin
-				AMOUNT <= AMOUNT + 4'd1;
-			end else if (!WRREQ && RDREQ && AMOUNT) begin
-				AMOUNT <= AMOUNT - 4'd1;
-			end
+			AMOUNT <= AMOUNT + {3'd0,WR_OK} - {3'd0,RD_OK};
 		end
 	end
 	assign EMPTY = ~|AMOUNT;
@@ -54,13 +60,13 @@ module CLIO_DMA_FIFO (
 	
 	always @(posedge CLK) begin
 		if (EN) begin
-			if (WRREQ) begin
+			if (WR_OK) begin
 				MEM[WADDR] <= DATA;
 			end
 		end
 	end
 
-	assign Q = MEM[RADDR];
+	assign Q = AMOUNT == 4'd0 && WRREQ ? DATA : MEM[RADDR];
 											  	
 `else 
 	
@@ -69,7 +75,7 @@ module CLIO_DMA_FIFO (
 				.inclock (CLK),
 				.rdaddress (RADDR),
 				.wraddress (WADDR),
-				.wren (WRREQ && EN),
+				.wren (WR_OK && EN),
 				.q (sub_wire0),
 				.aclr (1'b0),
 				.byteena (1'b1),
@@ -99,7 +105,7 @@ module CLIO_DMA_FIFO (
 		altdpram_component.wrcontrol_aclr = "OFF",
 		altdpram_component.wrcontrol_reg = "INCLOCK";
 		
-	assign Q = RADDR == WADDR && WRREQ ? DATA : sub_wire0;
+	assign Q = AMOUNT == 4'd0 && WRREQ ? DATA : sub_wire0;   // empty: the incoming word (pointers are equal when full too)
 
 `endif
 
@@ -334,7 +340,9 @@ module CLIO_DSP_EORAM (
 
 endmodule
 
-module CLIO_DSP_FIFO (
+module CLIO_DSP_FIFO #(
+	parameter DEPTH_BITS = 3        // 2**DEPTH_BITS words
+) (
 	input	        CLK,
 	input         EN,
 	input         RST,
@@ -344,13 +352,24 @@ module CLIO_DSP_FIFO (
 	input	        RDREQ,
 	output [15:0] Q,
 	
-	output [ 3:0] COUNT
+	output [DEPTH_BITS:0] COUNT
 );
 
-	bit  [ 2: 0] RADDR;
-	bit  [ 2: 0] WADDR;
-	bit  [ 3: 0] AMOUNT;
+	bit  [DEPTH_BITS-1: 0] RADDR;
+	bit  [DEPTH_BITS-1: 0] WADDR;
+	bit  [DEPTH_BITS: 0]   AMOUNT;
 	
+	// Game Bub port: a write is taken unless the FIFO is full and nothing is
+	// read; a read is taken if a word is there or is being written (empty:
+	// the reader gets the incoming word, Q bypass below). The count follows
+	// the words taken. The original advanced the write pointer on a write
+	// to an empty FIFO that was read in the same cycle (a DSP read meeting
+	// a DMA refill) without counting the word, so pointers and count
+	// disagreed from then on (words miscounted or read twice); a full FIFO
+	// read and written lost the count the same way, and a write to a full
+	// FIFO overwrote its oldest word.
+	wire         WR_OK = WRREQ && (!AMOUNT[DEPTH_BITS] || RDREQ);
+	wire         RD_OK = RDREQ && (AMOUNT != '0 || WRREQ);
 	always @(posedge CLK) begin
 		if (RST) begin
 			AMOUNT <= '0;
@@ -358,38 +377,33 @@ module CLIO_DSP_FIFO (
 			WADDR <= '0;
 		end
 		else if (EN) begin
-			if (WRREQ && !AMOUNT[3]) begin
-				WADDR <= WADDR + 3'd1;
+			if (WR_OK) begin
+				WADDR <= WADDR + 1'd1;
 			end
-			if (RDREQ && AMOUNT) begin
-				RADDR <= RADDR + 3'd1;
+			if (RD_OK) begin
+				RADDR <= RADDR + 1'd1;
 			end
-			
-			if (WRREQ && !RDREQ && !AMOUNT[3]) begin
-				AMOUNT <= AMOUNT + 4'd1;
-			end else if (!WRREQ && RDREQ && AMOUNT) begin
-				AMOUNT <= AMOUNT - 4'd1;
-			end
+			AMOUNT <= AMOUNT + (DEPTH_BITS+1)'(WR_OK) - (DEPTH_BITS+1)'(RD_OK);
 		end
 	end
 	assign COUNT = AMOUNT;
 
 `ifdef SIM
 
-	reg [15:0]  MEM[8];
+	reg [15:0]  MEM[1 << DEPTH_BITS];
 	initial begin
-		MEM <= '{8{'0}};
+		for (int i = 0; i < (1 << DEPTH_BITS); i++) MEM[i] = '0;
 	end
 	
 	always @(posedge CLK) begin
 		if (EN) begin
-			if (WRREQ) begin
+			if (WR_OK) begin
 				MEM[WADDR] <= DATA;
 			end
 		end
 	end
 
-	assign Q = MEM[RADDR];
+	assign Q = AMOUNT == '0 && WRREQ ? DATA : MEM[RADDR];
 											  	
 `else 
 	
@@ -399,7 +413,7 @@ module CLIO_DSP_FIFO (
 				.inclock (CLK),
 				.rdaddress (RADDR),
 				.wraddress (WADDR),
-				.wren (WRREQ && EN),
+				.wren (WR_OK && EN),
 				.q (sub_wire0),
 				.aclr (1'b0),
 				.byteena (1'b1),
@@ -422,14 +436,14 @@ module CLIO_DSP_FIFO (
 		altdpram_component.rdcontrol_reg = "UNREGISTERED",
 		altdpram_component.read_during_write_mode_mixed_ports = "CONSTRAINED_DONT_CARE",
 		altdpram_component.width = 16,
-		altdpram_component.widthad = 3,
+		altdpram_component.widthad = DEPTH_BITS,
 		altdpram_component.width_byteena = 1,
 		altdpram_component.wraddress_aclr = "OFF",
 		altdpram_component.wraddress_reg = "INCLOCK",
 		altdpram_component.wrcontrol_aclr = "OFF",
 		altdpram_component.wrcontrol_reg = "INCLOCK";
 		
-	assign Q = RADDR == WADDR && WRREQ ? DATA : sub_wire0;
+	assign Q = AMOUNT == '0 && WRREQ ? DATA : sub_wire0;   // empty: the incoming word (pointers are equal when full too)
 
 `endif
 

@@ -291,12 +291,12 @@ module emu
 	// 0         1         2         3          4         5         6   
 	// 01234567890123456789012345678901 23456789012345678901234567890123
 	// 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-	// X     XXXX  XXXXXXXXXX           XXXXXXXX                        
+	// X     XXXX  XXXXXXXXXX           XXXXXXXXXX                      
 	
 	`include "build_id.v"
 	localparam CONF_STR = {
 		"3DO;;",
-		"S0,CUEISO,Insert Disk;",
+		"S0,CUEISOCHD,Insert Disk;",
 		"FS2,BIN,Load bios;",
 		"-;",
 		"OFG,Region,BIOS,NTSC,PAL;",
@@ -315,8 +315,10 @@ module emu
 		"P2O[34:32],Pad,1,2,3,4,Off;",
 		"D1P2O[35],Flightstick,Off,On;",
 		"D2P2O[36],Mouse,Off,On;",
-		"P2O[38:37],Arcade control,Off,Trackball;",/*,LightGun*/
+		"D3P2O[41:40],Light gun,Off,Joy1,Joy2;",
+		"P2O[38:37],Arcade control,Off,Trackball,LightGun;",
 		"P2O[39],Arcade service,Off,On;",
+		"D4P2O[43:42],Crosshair,Small,Large,Off;",
 		"P2-;",
 
 		"P3,Hardware;",
@@ -336,7 +338,9 @@ module emu
 	};
 
 	wire [63:0] status;
-	wire [15:0] status_menumask = {13'd0,mouse_mask,stick_mask,~bk_ena};
+	wire [ 8:0] gun_x, gun_y;
+	wire        gun_on;
+	wire [15:0] status_menumask = {11'd0,~gun_on,gun_mask,mouse_mask,stick_mask,~bk_ena};
 	
 	wire  [1:0] buttons;
 	wire [15:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -485,7 +489,9 @@ module emu
 		end
 		if (!bios_download && bios_download_old) begin
 			bios_pal <= (cs == 32'hD63EC5E9 || //Panasonic FZ-1 (E)
-			             cs == 32'hD5CFD1C5);  //Panasonic FZ-1 (E) (unencrypted)
+			             cs == 32'hD5CFD1C5 || //Panasonic FZ-1 (E) (unencrypted)
+			             cs == 32'hD439B8FE || //Panasonic FZ-10 (E) ANVIL
+			             cs == 32'hD439B6FE);  //Panasonic FZ-10 (E) ANVIL (no RSA)
 		end 
 		
 		case (status[16:15])
@@ -591,6 +597,8 @@ module emu
 	wire [ 3: 0] LCODE;
 	wire [23: 2] RA;
 	wire         RRAS0_N;
+	wire [23: 2] LA_COL,RA_COL;
+	wire         LRAS0_COL_N,RRAS0_COL_N;
 	wire         RRAS2_N;
 	wire         RRAS3_N;
 	wire         RCAS_N;
@@ -606,6 +614,7 @@ module emu
 	wire         PBDIN;
 	wire         PBDOUT;
 	wire         PBCLK;
+	wire         VRAM_SP_CPU;
 	
 	wire [19: 0] PA;
 	wire [31: 0] PDI;
@@ -706,6 +715,10 @@ module emu
 		.LCODE(LCODE),
 		.RA(RA),
 		.RRAS0_N(RRAS0_N),
+		.LA_COL(LA_COL),
+		.LRAS0_COL_N(LRAS0_COL_N),
+		.RA_COL(RA_COL),
+		.RRAS0_COL_N(RRAS0_COL_N),
 		.RRAS2_N(RRAS2_N),
 		.RRAS3_N(RRAS3_N),
 		.RCAS_N(RCAS_N),
@@ -721,6 +734,8 @@ module emu
 		.PBDIN(PBDIN),
 		.PBDOUT(PBDOUT),
 		.PBCLK(PBCLK),
+		
+		.VRAM_SP_CPU(VRAM_SP_CPU),
 			
 		.PA(PA),
 		.PDI(PDI),
@@ -798,8 +813,10 @@ module emu
 	
 	wire [2:0] pad_sel = status[34:32] >= 3'd4 ? 3'd0 : status[34:32] + 3'd1;
 	wire [1:0] arcade_sel = status[38:37];
-	wire stick_mask = ~(pad_sel <= 3'd1 && !arcade_sel);
-	wire mouse_mask = ~(pad_sel <= 3'd2 && !arcade_sel);
+	wire gun_mask = ~(pad_sel <= 3'd2 && !arcade_sel);
+	wire [1:0] gun_sel = (gun_mask || status[41:40] == 2'd3) ? 2'd0 : status[41:40];
+	wire stick_mask = ~(pad_sel <= 3'd1 && !arcade_sel && !gun_sel);
+	wire mouse_mask = ~(pad_sel <= 3'd2 && !arcade_sel && !gun_sel);
 	
 	HPS2PAD pad
 	(
@@ -819,6 +836,8 @@ module emu
 		.ARCADE_SEL(arcade_sel),
 		.STICK_EN(status[35]&~stick_mask),
 		.MOUSE_EN(status[36]&~mouse_mask),
+		.GUN_SEL(gun_sel),
+		.GUN_PAL(PAL),
 		.ARCADE_SERVICE(status[39]),
 	
 		.joystick_0(joystick_0[12:0]),
@@ -833,7 +852,11 @@ module emu
 		.joy1_y0(joy1_y0),
 		.joy1_x1(joy1_x1),
 		.joy1_y1(joy1_y1),
-		.ps2_mouse(ps2_mouse)
+		.ps2_mouse(ps2_mouse),
+
+		.GUN_X(gun_x),
+		.GUN_Y(gun_y),
+		.GUN_ON(gun_on)
 	);
 	
 	
@@ -884,6 +907,7 @@ module emu
 	bit          VRAM_LRDY,VRAM_RRDY;
 	bit  [31: 0] vram_bldata;
 	
+	wire         vram_lbusy,vram_rbusy;	//a VRAM half runs a transfer (write masks)
 	P3DO_VRAM #(`USE_BRAM_BLOCKS_FOR_VRAM) vram_l
 	(
 		.CLK(clk_sys),
@@ -917,7 +941,14 @@ module emu
 		
 		.BRAM4_OFFS(BRAM4_OFFS),
 		.BRAM2_OFFS(BRAM2_OFFS),
-		.BRAM1_OFFS(BRAM1_OFFS)
+		.BRAM1_OFFS(BRAM1_OFFS),
+		
+		.SP_CPU(VRAM_SP_CPU),
+		.DP(RAM_DO[15:0]),
+		.PEER_BUSY(vram_rbusy),
+		.XBUSY(vram_lbusy),
+		
+		.DBG_WAIT_CNT()
 	);
 	
 	bit  [31: 0] vram_brdata;
@@ -954,7 +985,14 @@ module emu
 		
 		.BRAM4_OFFS(BRAM4_OFFS),
 		.BRAM2_OFFS(BRAM2_OFFS),
-		.BRAM1_OFFS(BRAM1_OFFS)
+		.BRAM1_OFFS(BRAM1_OFFS),
+		
+		.SP_CPU(VRAM_SP_CPU),
+		.DP(RAM_DO[31:16]),
+		.PEER_BUSY(vram_lbusy),
+		.XBUSY(vram_rbusy),
+		
+		.DBG_WAIT_CNT()
 	);
 	
 	assign RAM_DI = !LRAS0_N || !RRAS0_N ? VRAM_Q : sdr_dout;
@@ -983,8 +1021,34 @@ module emu
 	wire         ddr_blte,ddr_brte;
 	wire         ddr_bbusy;
 	
-	wire         ddr_luse = ~((`USE_BRAM_BLOCKS_FOR_VRAM && LA[19:2] >= ({BRAM4_OFFS+0,16'h0000}>>2) && LA[19:2] <= ({BRAM4_OFFS+3,16'hFFFF}>>2)) || (`USE_BRAM_BLOCKS_FOR_VRAM && LA[19:2] >= ({BRAM2_OFFS+0,16'h0000}>>2) && LA[19:2] <= ({BRAM2_OFFS+1,16'hFFFF}>>2)) || (LA[19:2] >= ({BRAM1_OFFS+0,16'h0000}>>2) && LA[19:2] <= ({BRAM1_OFFS+0,16'hBFFF}>>2)) || (LA[19:2] >= (20'hFC000>>2)));
-	wire         ddr_ruse = ~((`USE_BRAM_BLOCKS_FOR_VRAM && RA[19:2] >= ({BRAM4_OFFS+0,16'h0000}>>2) && RA[19:2] <= ({BRAM4_OFFS+3,16'hFFFF}>>2)) || (`USE_BRAM_BLOCKS_FOR_VRAM && RA[19:2] >= ({BRAM2_OFFS+0,16'h0000}>>2) && RA[19:2] <= ({BRAM2_OFFS+1,16'hFFFF}>>2)) || (RA[19:2] >= ({BRAM1_OFFS+0,16'h0000}>>2) && RA[19:2] <= ({BRAM1_OFFS+0,16'hBFFF}>>2)) || (RA[19:2] >= (20'hFC000>>2)));
+	// VRAM words outside the on-chip blocks (BRAM4/BRAM2 with
+	// USE_BRAM_BLOCKS_FOR_VRAM, BRAM1 up to xBFFF, FC000-FFFFF) go to
+	// ddram.sv. The windows are whole 64 KiB blocks, except that the BRAM1
+	// block ends at xBFFF and FC000-FFFFF is on chip: per block, whether its
+	// first three quarters (K0) and its last quarter (K1) are on chip, kept in
+	// registers (the offsets are static), so the address only selects a bit
+	// (it was compared with each bound, on MADAM's address path to ddram.sv).
+	reg  [15: 0] ddr_onchip_k0,ddr_onchip_k1;
+	always @(posedge clk_sys) begin
+		for (int b=0; b<16; b++) begin
+			bit full;
+			full = `USE_BRAM_BLOCKS_FOR_VRAM && ((b >= BRAM4_OFFS && b <= BRAM4_OFFS + 3) || (b >= BRAM2_OFFS && b <= BRAM2_OFFS + 1));
+			ddr_onchip_k0[b] <= full || (b == BRAM1_OFFS);
+			ddr_onchip_k1[b] <= full || (b == 15);
+		end
+	end
+	// ddram.sv takes the address and the VRAM RAS of the access's second
+	// phase (MADAM_AG LA_COL: the same as LA whenever OE or WE is active), and
+	// the RAS as it was at the previous clk_sys edge from a clk_sys register:
+	// its strobes rise at clk_sys edges, so that is the RAS its clk_mem
+	// register held at the edge it sees a strobe rise.
+	wire         ddr_luse = ~(&LA_COL[15:14] ? ddr_onchip_k1[LA_COL[19:16]] : ddr_onchip_k0[LA_COL[19:16]]);
+	wire         ddr_ruse = ~(&RA_COL[15:14] ? ddr_onchip_k1[RA_COL[19:16]] : ddr_onchip_k0[RA_COL[19:16]]);
+	reg          ddr_lras_d,ddr_rras_d;
+	always @(posedge clk_sys) begin
+		ddr_lras_d <= !LRAS0_N;
+		ddr_rras_d <= !RRAS0_N;
+	end
 	
 	ddram ddram
 	(
@@ -1008,15 +1072,17 @@ module emu
 		.nvram_busy(ddr_nvram_busy),
 		
 		.sclk(SYS_CE_R),
-		.laddr(LA[19:2]),
+		.laddr(LA_COL[19:2]),
 		.ldin (RAM_DO[31:16]),
-		.lras (!LRAS0_N),
+		.lras (!LRAS0_COL_N),
+		.lras_d(ddr_lras_d),
 		.lwe  (ddr_luse ? ~LWE_N : '0),
 		.lrd  (ddr_luse ? ~LOE_N : 0),
 		.ldout(ddr_do[31:16]),
-		.raddr(RA[19:2]),
+		.raddr(RA_COL[19:2]),
 		.rdin (RAM_DO[15:0]),
-		.rras (!RRAS0_N),
+		.rras (!RRAS0_COL_N),
+		.rras_d(ddr_rras_d),
 		.rwe  (ddr_ruse ? ~RWE_N : '0),
 		.rrd  (ddr_ruse ? ~ROE_N : 0),
 		.rdout(ddr_do[15:0]),
@@ -1217,6 +1283,29 @@ module emu
 	assign VGA_SL = {~INTERLACE,~INTERLACE} & sl[1:0];
 	assign VGA_F1 = INTERLACE & FIELD;
 	
+	reg  [1:0] cross_sel;
+	reg        cross_on;
+	always @(posedge clk_vid) begin
+		cross_sel <= status[43:42];
+		cross_on <= gun_on;
+	end
+	wire cross_draw, cross_white;
+	GUN_CROSS gun_cross
+	(
+		.CLK(clk_vid),
+		.DCLK(DCLK),
+		.HBLK_N(HBL_N),
+		.VBLK_N(VBL_N),
+
+		.EN(cross_on && cross_sel < 2'd2),
+		.LARGE(cross_sel == 2'd1),
+		.GUN_X(gun_x),
+		.GUN_Y(gun_y),
+
+		.DRAW(cross_draw),
+		.COLOR(cross_white)
+	);
+
 	wire vga_de;
 	video_mixer #(.LINE_LENGTH(8), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	(
@@ -1229,9 +1318,9 @@ module emu
 	
 		.VGA_DE(vga_de),
 
-		.R(R),
-		.G(G),
-		.B(B),
+		.R(cross_draw ? {8{cross_white}} : R),
+		.G(cross_draw ? {8{cross_white}} : G),
+		.B(cross_draw ? {8{cross_white}} : B),
 	
 		// Positive pulses.
 		.HSync(~HS_N),

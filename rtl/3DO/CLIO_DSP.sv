@@ -200,6 +200,8 @@ module CLIO_DSP
 	wire ARITH_USE_BS = ALU_INST.BS == 4'b1000 && !OPMASK.BS;
 	wire ARITH_INSTANT_BS = ALU_INST.BS != 4'b1000 && !OPMASK.BS;
 	wire ARITH_ALU_TRANSFER = ALU_INST.ALU[2:0] == 3'b000;
+	// clocks an arithmetic instruction computes: one bit, shifted out
+	wire [ 3: 0] ARITH_COMP_WAIT = {1'b0, ARITH_USE_MULT & ~ARITH_ALU_TRANSFER, ARITH_USE_MULT ^ ~ARITH_ALU_TRANSFER, ~ARITH_USE_MULT & ARITH_ALU_TRANSFER};
 	
 	wire [ 4: 0] OPERAND_REQS = {MULT1_REQ,MULT2_REQ,ALU1_REQ,ALU2_REQ,BS_REQ};
 	wire EXACTLY_1_REQ = ExactlyOne(OPERAND_REQS);
@@ -297,6 +299,8 @@ module CLIO_DSP
 			DO_WRITE <= '{2{0}};
 			CURR_REG_OPERAND <= '0;
 			OP_RDY <= 0;
+			ACC <= '0;
+			STATUS <= '0;
 		end
 		else if (RESET && CE_R) begin
 			RESET_DELAY <= 1;
@@ -329,6 +333,10 @@ module CLIO_DSP
 			DO_WRITE <= '{2{0}};
 			CURR_REG_OPERAND <= '0;
 			OP_RDY <= 0;
+			// every frame starts with the accumulator and the flags clear (Opera
+			// opera_dsp_loop: Y = 0, flags = 0 before the first instruction)
+			ACC <= '0;
+			STATUS <= '0;
 		end
 		else if (EN && GW && CE_R) begin
 			RESET_DELAY <= 0;
@@ -430,10 +438,7 @@ module CLIO_DSP
 								2'b00: NUM_OPERANDS <= ARITH_USE_ALU1 || ARITH_USE_ALU2 ? 4'b1000 : 4'b0000;
 							endcase
 							
-							COMP_WAIT[0][3] <= 0;
-							COMP_WAIT[0][2] <= ARITH_USE_MULT & ~ARITH_ALU_TRANSFER;
-							COMP_WAIT[0][1] <= ARITH_USE_MULT ^ ~ARITH_ALU_TRANSFER;
-							COMP_WAIT[0][0] <= ~ARITH_USE_MULT & ARITH_ALU_TRANSFER;
+							COMP_WAIT[0] <= ARITH_COMP_WAIT;
 							
 							if (NONE_OPERAND) FETCH_OP_RDY_SET = 1;
 							
@@ -589,8 +594,9 @@ module CLIO_DSP
 						else if (ADDR_IND_OPERAND) begin
 							if (OPERAND_REQS) begin
 //								READ_CYCLE <= 1;
+								// the pointer: the operand is read through it in
+								// OPER_INDIRECT (as the register operands' indirect forms)
 								INDIRECT <= RDDATA[9:0];
-								HIGH_PRIORITY = 1;
 								WRITE_BUS = RDDATA[9:0];
 								if (ADDR_OPER.WB1) begin
 									WRITE_ACT = 1;
@@ -721,10 +727,13 @@ module CLIO_DSP
 					NUM_OPERANDS <= NUM_OPERANDS >> 1;
 				 end
 				 else if (BS_REQ) begin
+					// BS = 1000: the operand is the shift control (bits 3-0 the
+					// shift, bit 4 logical); it is not one of the instruction's
+					// counted operands (WO 94/16383: "It does not include a
+					// Barrel Shifter operand; that is handled independently")
 					BS_REQ <= 0;
-					BSEL[0] <= ALU_INST.BS;
-					BT[0] <= ALU_INST.ALU[3];
-					NUM_OPERANDS <= NUM_OPERANDS >> 1;
+					BSEL[0] <= OP_BUS[3:0];
+					BT[0] <= OP_BUS[4];
 				 end
 				 
 				 if (EXACTLY_1_REQ) begin
@@ -812,9 +821,12 @@ module CLIO_DSP
 				M2SEL[1] <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.M2SEL                  : M2SEL[0];
 				ASEL[1]  <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.ALU                    : ASEL[0];
 				AMX[1]   <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? {ALU_INST.AMX_A,ALU_INST.AMX_B} : AMX[0];
-				BSEL[1]  <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.BS                     : BSEL[0];
-				BT[1]    <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.ALU[3]                 : BT[0];
-				COMP_WAIT[1] <= COMP_WAIT[0];
+				BSEL[1]  <= HIGH_PRIORITY && BS_REQ ? OP_BUS[3:0] : FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.BS     : BSEL[0];
+				BT[1]    <= HIGH_PRIORITY && BS_REQ ? OP_BUS[4]   : FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ALU_INST.ALU[3] : BT[0];
+				// an instruction without operands computes in the clock it is fetched,
+				// before COMP_WAIT[0] holds its timing: take it from the decode, as
+				// M2SEL / ASEL / AMX / BSEL / BT above
+				COMP_WAIT[1] <= FETCH_ST == FETCH_INST && !OP_RDY && !ALU_INST.A_C && COMP_RDY ? ARITH_COMP_WAIT : COMP_WAIT[0];
 				COMP_NUM <= ~COMP_NUM;
 				OP_RDY <= 0;
 			end
@@ -862,7 +874,7 @@ module CLIO_DSP
 			4'b0011,
 			4'b0101: ALU_ARITH_B = ALU_CARRY;
 			4'b0110,
-			4'b0111: ALU_ARITH_B = {16'h0001,4'h0};
+			4'b0111: ALU_ARITH_B = 20'h00001;   // INC / DEC: the ALU's LSB (Opera +0x1000 on Y[31:12], MAME alu_a + 1)
 			default: ALU_ARITH_B = ALU_B;
 		endcase
 		case (ASEL[1])
@@ -931,7 +943,25 @@ module CLIO_DSP
 	assign EO_WE = (WRADDR[9:8] == 2'h3) && WREN;
 	
 	
-	assign RDDATA = IRAM_OE ? IRAM_DATA : EI_DATA;
+	// Game Bub port: a read of the word an instruction is writing in this
+	// clock (the MOVE's word, or an ALU result whose write waits for the
+	// port behind a MOVE's) gets the new word. The original read the memory
+	// (undefined for the same address in hardware, old in simulation): an
+	// instruction two after an ALU writeback read the old value when a MOVE
+	// between them had delayed the writeback to the clock of its read
+	// (Killing Time's DSP interrupt counter).
+	// The data memory has 256 words: 0x100-0x1FF and 0x200-0x2FF are the same
+	// words (address bits 7-0), so a write to either is forwarded to a read of
+	// either, and only data memory writes are (an output word at 0x308 is not
+	// the data word 0x108).
+	wire         ALU_WRITE_DUE  = (DO_WRITE[COMP_NUM] && COMP_ST == COMP_IDLE) || (DO_WRITE[~COMP_NUM] && COMP_ST == COMP_CALC);
+	wire [ 9: 0] ALU_WRITE_ADDR = COMP_ST == COMP_IDLE ? WRITE[COMP_NUM] : WRITE[~COMP_NUM];
+	function automatic bit iram_addr(input [9:0] a);
+		return a[9:8] == 2'h1 || a[9:8] == 2'h2;
+	endfunction
+	wire         RD_FWD_MOVE    = MOVE_WRITE_EN && iram_addr(WRITE[~ARITH_NUM]) && RDADDR[7:0] == WRITE[~ARITH_NUM][7:0];
+	wire         RD_FWD_ALU     = ALU_WRITE_DUE && iram_addr(ALU_WRITE_ADDR)   && RDADDR[7:0] == ALU_WRITE_ADDR[7:0];
+	assign RDDATA = IRAM_OE ? (RD_FWD_MOVE ? MOVE : RD_FWD_ALU ? ACC[19:4] : IRAM_DATA) : EI_DATA;
 	
 endmodule
 

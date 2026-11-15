@@ -13,7 +13,7 @@ module MADAM_SPORT
 	input BusState_t   BUS_STATE,
 	input              GRANT,
 	output AddrGenCtl_t AG_CTL,
-	output             LINE0,
+	output reg             LINE0,
 	input              LMIDLINE_REQ,
 	input              RMIDLINE_REQ,
 	
@@ -29,6 +29,7 @@ module MADAM_SPORT
 	output reg         VIDMID_CURR,
 	output reg         VIDMID_FIRST,
 	input              VIDOUT_ACK,
+	input              VIDMID_ACK,   // Game Bub port: see MADAM_ARB
 	
 	input              VCE,
 	input              PCSC,
@@ -205,7 +206,11 @@ module MADAM_SPORT
 				if (PEND && HCOUNT >= 11'd1340 - 1) begin
 					CNT <= '0;
 					PEND <= 0;
-					CLUT_TRANS_EXEC <= CLUTXEN;
+					// Game Bub port: an entry with no optional words (length 0)
+					// shifts none out (Opera; the patent: "a number of optional
+					// additional control words ... if any"). The count wrapped
+					// to 64 words before, the next entry's header among them.
+					CLUT_TRANS_EXEC <= CLUTXEN && CLUT_DMACTL.LEN != '0;
 				end
 				
 				if (CLUT_TRANS_EXEC) begin
@@ -263,8 +268,10 @@ module MADAM_SPORT
 		end
 	end 
 	
+	wire VID_SEQ = (BUS_STATE_FF >= VID_PREINIT1 && BUS_STATE_FF <= VID_MIDCURR1);
 	wire VID_PREV_TRANS = (BUS_STATE_FF == VID_PREV1);
 	wire VID_CURR_TRANS = (BUS_STATE_FF == VID_CURR1);
+
 	always @(posedge CLK or negedge RST_N) begin
 		bit          LMID_PEND,RMID_PEND;
 		
@@ -289,17 +296,22 @@ module MADAM_SPORT
 			if (LMIDLINE_REQ && VIDEO_TRANS_EXEC) LMID_PEND <= 1;
 			if (RMIDLINE_REQ && VIDEO_TRANS_EXEC) RMID_PEND <= 1;
 			
-			if (LMID_PEND && !VIDMID_REQ) begin
+			// Game Bub port: a pending mid-line request is posted only when no
+			// video sequence is on the bus: posting sets VIDMID_CURR, which a
+			// running sequence still reads to pick the DMA register it
+			// advances (VID_MIDINIT1), and the original's posting one CE_R
+			// after the previous grant advanced the other half's register.
+			if (LMID_PEND && !VIDMID_REQ && !VID_SEQ) begin
 				LMID_PEND <= 0;
 				VIDMID_REQ <= 1;
 				VIDMID_CURR <= ~VIDOUT_PFL;
 			end
-			else if (RMID_PEND && !VIDMID_REQ) begin
+			else if (RMID_PEND && !VIDMID_REQ && !VID_SEQ) begin
 				RMID_PEND <= 0;
 				VIDMID_REQ <= 1;
 				VIDMID_CURR <= VIDOUT_PFL;
 			end
-			if (VIDMID_REQ && VIDOUT_ACK) begin
+			if (VIDMID_REQ && VIDMID_ACK) begin
 				VIDMID_REQ <= 0;
 			end
 `ifdef DEBUG
@@ -399,14 +411,24 @@ module MADAM_SPORT
 				AG_CTL.DMA_ADDER_CTL = 4'b0001;
 			end
 			
+			// Header bit 18 (VDL_RELSEL, named NPABS here) set: the next
+			// VDL address is relative, word 3 + the address after it
+			// (entry + 16 bytes; patent: REL = target - PC - 4; Opera
+			// next += entry + 16). Clear: word 3 as loaded in CLUT_NEXT1.
+			// REL0 (the address bus holds word 3's address, OFFS_FF word
+			// 3) writes the next VDL address (1) as address + OFFS + 1 and
+			// reads the list pointer (0, word 3's address) back onto the
+			// bus; REL1 then writes the pointer as address + 1, the first
+			// optional word, for CLUT_TRANSFER.
 			CLUT_NEXT_REL0: begin
 				AG_CTL.DMA_OWN_SEL = 1;
 				AG_CTL.DMA_REG_READ_SEL = 1;
 				AG_CTL.DMA_REG_READ_CTL = 2'h0;
 				AG_CTL.DMA_REG_WRITE_SEL = 0;
-				AG_CTL.DMA_REG_WRITE_CTL = 3'h0;
-				AG_CTL.DMA_REG_WRITE_EN = 1;
-				AG_CTL.DMA_ADDER_CTL = 4'b0001;
+				AG_CTL.DMA_REG_WRITE_CTL = 3'h1;
+				AG_CTL.DMA_REG_WRITE_EN = CLUT_DMACTL.NPABS;
+				AG_CTL.DMA_ADDR_SEL = 1;
+				AG_CTL.DMA_ADDER_CTL = 4'b0110;
 			end
 			
 			CLUT_NEXT_REL1: begin
@@ -414,8 +436,8 @@ module MADAM_SPORT
 				AG_CTL.DMA_REG_READ_SEL = 1;
 				AG_CTL.DMA_REG_READ_CTL = 2'h0;
 				AG_CTL.DMA_REG_WRITE_SEL = 0;
-				AG_CTL.DMA_REG_WRITE_CTL = 3'h1;
-				AG_CTL.DMA_REG_WRITE_EN = CLUT_DMACTL.NPABS;
+				AG_CTL.DMA_REG_WRITE_CTL = 3'h0;
+				AG_CTL.DMA_REG_WRITE_EN = 1;
 				AG_CTL.DMA_ADDR_SEL = 1;
 				AG_CTL.DMA_ADDER_CTL = 4'b0001;
 			end

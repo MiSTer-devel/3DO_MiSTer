@@ -14,6 +14,8 @@ module HPS2PAD (
 	input      [ 1: 0] ARCADE_SEL,
 	input              STICK_EN,
 	input              MOUSE_EN,
+	input      [ 1: 0] GUN_SEL,        //0 - off, 1 - gun on joystick 0, 2 - gun on joystick 1
+	input              GUN_PAL,        //PAL scan constants for the light gun
 	input              ARCADE_SERVICE,
 	
 	input      [12: 0] joystick_0,
@@ -28,7 +30,11 @@ module HPS2PAD (
 	input      [7 : 0] joy1_y0,
 	input      [7 : 0] joy1_x1,
 	input      [7 : 0] joy1_y1,
-	input      [24: 0] ps2_mouse
+	input      [24: 0] ps2_mouse,
+
+	output     [ 8: 0] GUN_X,          //light gun aim, framebuffer pixel 0..319
+	output     [ 8: 0] GUN_Y,          //0..239
+	output             GUN_ON          //a light gun is connected (home or arcade)
 );
 	
 	function automatic [7:0] stick_axis(input signed [7:0] axis);
@@ -41,7 +47,7 @@ module HPS2PAD (
 
 	function automatic signed [10:0] mouse_delta(input ovf, input sign, input [7:0] data);
 		begin
-			if (ovf) mouse_delta = sign ? -11'sd1024 : 11'sd1022;
+			if (ovf) mouse_delta = sign ? 11'sh400 : 11'sd1022;
 			else     mouse_delta = $signed({sign,sign,sign,data}) <<< 1;
 		end
 	endfunction
@@ -49,18 +55,24 @@ module HPS2PAD (
 	function automatic signed [10:0] mouse_limit(input signed [11:0] axis);
 		begin
 			if (axis > 12'sd1023) mouse_limit = 11'sd1023;
-			else if (axis < -12'sd1024) mouse_limit = -11'sd1024;
+			else if (axis < -12'sd1024) mouse_limit = 11'sh400;
 			else mouse_limit = axis[10:0];
 		end
 	endfunction
 
+	// A read takes up to the 10-bit field's range, -511..511. With the former
+	// limit of 96 counts per read a fast mouse could not move the cursor faster
+	// than 96 counts a field, and the rest of a fast movement queued up and
+	// drained over the next fields (the cursor went on after the mouse stopped).
 	function automatic signed [9:0] mouse_step(input signed [10:0] axis);
 		begin
-			if (axis > 11'sd96) mouse_step = 10'sd96;
-			else if (axis < -11'sd96) mouse_step = -10'sd96;
+			if (axis > 11'sd511) mouse_step = 10'sd511;
+			else if (axis < -11'sd511) mouse_step = -10'sd511;
 			else mouse_step = axis[9:0];
 		end
 	endfunction
+	
+	bit          LATCH;
 	
 	//pad
 	wire [15:0] joy0_data = {1'b1, 2'b00, joystick_0[2], joystick_0[3], joystick_0[0], joystick_0[1], joystick_0[4], joystick_0[5], joystick_0[6], joystick_0[7], joystick_0[8], joystick_0[9], joystick_0[10], 2'b00};
@@ -136,11 +148,14 @@ module HPS2PAD (
 				y = y - $signed({{2{mouse_y[9]}},mouse_y});
 			end
 
+			// the buttons are the flags byte's as it stands (hps_io keeps it
+			// between packets), not the last packet's since the mouse was enabled:
+			// a button held from before the mouse was switched on was never seen
+			mouse_left <= ps2_mouse[0];
+			mouse_middle <= ps2_mouse[2];
+			mouse_right <= ps2_mouse[1];
 			if (ps2_mouse[24] != mouse_toggle) begin
 				mouse_toggle <= ps2_mouse[24];
-				mouse_left <= ps2_mouse[0];
-				mouse_middle <= ps2_mouse[2];
-				mouse_right <= ps2_mouse[1];
 				x = x + $signed({mouse_dx[10],mouse_dx});
 				y = y - $signed({mouse_dy[10],mouse_dy});
 			end
@@ -172,10 +187,142 @@ module HPS2PAD (
 		mouse_x[9:0]
 	};
 	
+	//light gun (Portfolio LightGunRom.c / lightgun.h; Opera opera_pbus.c)
+	// The gun reports no position: a 20-bit count from the start of the
+	// field to the moment its sensor saw the beam, and the number of line
+	// pulses it saw (0: no hit). The driver turns it back into a position:
+	//   c' = count + TIMEOFFSET, y = 10 c' / YSCANTIME,
+	//   x = ((10 c') % YSCANTIME) * WIDTH / (XSCANTIME * 10).
+	// Here, for a pixel (x, y):
+	//   count = ceil((y * YSCANTIME + ceil(x * XSCANTIME * 10 / WIDTH)) / 10) - TIMEOFFSET
+	// Opera rounds the division by 10 down; then 10 c' can fall before the
+	// line's start, and the driver decodes x = 0 as the end of the line
+	// above. With both divisions rounded up every pixel decodes to itself:
+	// a pixel is XSCANTIME * 10 / WIDTH (27 PAL, 32 NTSC) units of 10 c'
+	// wide, the two roundings add at most 10. NTSC 1030 / 12707 / -12835 /
+	// 320 wide, PAL 1051 / 12796 / -58995 / 388 wide (lightgun.h: the PAL
+	// values are the SDK's defaults, not verified on a PAL gun).
+	// The aim is the light gun position hps_io gives on the left analog axes:
+	// Main_MiSTer scales the calibrated screen to -127..+127 (clamped there;
+	// -128 is taken as -127). The screen it was calibrated on is the VE
+	// window, framebuffer pixels 0..319 x 0..239 in NTSC and in PAL (VE keeps
+	// the 640 dot, 240 line window in PAL), so the aim maps to that, rounded:
+	//   x = ((a + 127) * 319 + 127) / 254, y = ((a + 127) * 239 + 127) / 254
+	// -127 is the first pixel, 0 the middle (160, 120), +127 the last. The
+	// division by 254 is a multiplication by 132105 / 2^25 (exact for these
+	// numbers). The other divisions run in a small serial divider that
+	// repeats all the time (about 60 clocks); the result changes only
+	// between whole computations.
+	wire        gun_arcade = (ARCADE_SEL == 2'd2);
+	wire        gun_joy1 = (GUN_SEL == 2'd2) && !gun_arcade;
+	wire [12:0] gun_btn = gun_joy1 ? joystick_1 : joystick_0;
+	wire [ 7:0] gun_ax = gun_joy1 ? joy1_x0 : joy0_x0;
+	wire [ 7:0] gun_ay = gun_joy1 ? joy1_y0 : joy0_y0;
+	wire [ 7:0] gun_ux = (gun_ax == 8'h80) ? 8'd0 : 8'(gun_ax + 8'd127);   // 0..254
+	wire [ 7:0] gun_uy = (gun_ay == 8'h80) ? 8'd0 : 8'(gun_ay + 8'd127);
+	
+	wire        gun_trigger = gun_btn[4];             //A
+	wire        gun_option = gun_btn[5];              //B
+	wire        gun_offscreen = gun_btn[6];           //C: shot off screen (reload) / holster
+	
+	wire [ 8:0] LG_W   = GUN_PAL ? 9'd388 : 9'd320;
+	wire [10:0] LG_XS  = GUN_PAL ? 11'd1051 : 11'd1030;
+	wire [13:0] LG_YS  = GUN_PAL ? 14'd12796 : 14'd12707;
+	wire [15:0] LG_OFF = GUN_PAL ? 16'd58995 : 16'd12835;
+	reg  [19:0] lg_count;   // cleared by RST
+	reg  [ 2:0] lg_st;
+	reg  [16:0] lg_nx, lg_ny;
+	reg  [ 8:0] lg_px, lg_py;
+	reg  [23:0] lg_num, lg_q, lg_rem;
+	reg  [ 8:0] lg_den;
+	reg  [ 4:0] lg_bit;
+	always @(posedge CLK) begin
+		if (RST) begin
+			lg_st <= '0;
+			lg_count <= '0;
+		end else begin
+			case (lg_st)
+				3'd0: begin   // aim -127..+127 to 0..254, times the last pixel, + half of 254
+					lg_nx <= 17'(gun_ux) * 17'd319 + 17'd127;
+					lg_ny <= 17'(gun_uy) * 17'd239 + 17'd127;
+					lg_st <= 3'd1;
+				end
+				3'd1: begin   // / 254: pixel position
+					lg_px <= 9'((35'(lg_nx) * 35'd132105) >> 25);
+					lg_py <= 9'((35'(lg_ny) * 35'd132105) >> 25);
+					lg_st <= 3'd2;
+				end
+				3'd2: begin   // x * XSCANTIME * 10 / WIDTH, rounded up
+					lg_num <= 24'(lg_px * LG_XS * 10) + 24'(LG_W) - 24'd1;
+					lg_den <= LG_W;
+					lg_q <= '0; lg_rem <= '0; lg_bit <= 5'd23;
+					lg_st <= 3'd3;
+				end
+				3'd3, 3'd5: begin   // one bit of a restoring division a step
+					reg [24:0] r;
+					r = {lg_rem, lg_num[lg_bit]};
+					if (r >= 25'(lg_den)) begin lg_rem <= 24'(r - 25'(lg_den)); lg_q[lg_bit] <= 1'b1; end
+					else                  begin lg_rem <= r[23:0];                 lg_q[lg_bit] <= 1'b0; end
+					if (lg_bit == 0) lg_st <= lg_st + 3'd1;
+					else lg_bit <= lg_bit - 5'd1;
+				end
+				3'd4: begin   // + y * YSCANTIME, then / 10 rounded up
+					lg_num <= 24'(lg_py * LG_YS) + lg_q + 24'd9;
+					lg_den <= 9'd10;
+					lg_q <= '0; lg_rem <= '0; lg_bit <= 5'd23;
+					lg_st <= 3'd5;
+				end
+				3'd6: begin   // - TIMEOFFSET, 20 bits
+					lg_count <= 20'(lg_q + 24'(LG_OFF));
+					lg_st <= 3'd0;
+				end
+				default: lg_st <= 3'd0;
+			endcase
+		end
+	end
+	
+	assign GUN_X = lg_px;
+	assign GUN_Y = lg_py;
+	assign GUN_ON = gun_arcade || (GUN_SEL != 2'd0 && !ARCADE_SEL && PAD_SEL <= 3'd2);
+
+	//home gun: a shot off screen is seen as trigger with no light detected
+	wire [39:0] gun_data = {
+		8'h4D,
+		gun_trigger | gun_offscreen,
+		3'b000,
+		gun_option,
+		2'b00,
+		gun_offscreen ? 20'd0 : lg_count,
+		gun_offscreen ? 5'd0 : 5'h1F
+	};
+	//arcade gun: holstered gun points at the top left corner with no light detected
+	wire [39:0] arcade_gun = {
+		8'h4D,
+		gun_trigger,
+		ARCADE_SERVICE,
+		joystick_0[12],
+		joystick_0[11],
+		gun_offscreen,
+		2'b00,
+		gun_offscreen ? 20'(LG_OFF) : lg_count,
+		gun_offscreen ? 5'd0 : 5'h1F
+	};
+	
 	bit [255: 0] IN_DATA;
 	always_comb begin
-		if (ARCADE_SEL)
+		if (gun_arcade)
+			IN_DATA = {arcade_gun,{256-40{1'b1}}};
+		else if (ARCADE_SEL)
 			IN_DATA = {arcade_tb,arcade_silli,{256-32-32{1'b1}}};
+		else if (GUN_SEL)
+			case (PAD_SEL)
+				//the gun is first in the chain, then the pads (American Laser Games manuals:
+				//"Player one's game pad/lightgun/mouse should be first in the daisy chain")
+				3'b000:  IN_DATA = {gun_data,                    {256-40-00{1'b1}}};
+				3'b001:  IN_DATA = {gun_data,joy0_data,          {256-40-16{1'b1}}};
+				3'b010:  IN_DATA = {gun_data,joy0_data,joy1_data,{256-40-32{1'b1}}};
+				default: IN_DATA = {                             {256      {1'b1}}};
+			endcase
 		else
 			case ({MOUSE_EN,STICK_EN,PAD_SEL})
 				5'b0_0_001: IN_DATA = {joy0_data,                                                     {256-16      {1'b1}}};
@@ -193,7 +340,6 @@ module HPS2PAD (
 			endcase
 	end
 
-	bit          LATCH;
 	always @(posedge CLK) begin
 		bit [  2: 0] STATE;
 		bit [255: 0] DIN,DOUT;
