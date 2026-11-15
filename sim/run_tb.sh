@@ -20,7 +20,7 @@ RTL_FILES=(
     3DO/CLIO_mem.sv 3DO/CLIO_CLUT.sv 3DO/CLIO_INTERPOL.sv 3DO/CLIO_VIDEO.sv 3DO/CLIO_DSP.sv
     3DO/CLIO_XBUS.sv 3DO/CLIO.sv
     3DO/OSA.sv 3DO/VE.sv 3DO_mem.sv
-    hps2pad.sv vram.sv ddram.sv
+    hps2pad.sv gun_cross.sv vram.sv ddram.sv
 )
 FILES=("$HERE/models/altera_sim.sv" "$HERE/models/ce_gen.sv")
 for f in "${RTL_FILES[@]}"; do FILES+=("$RTL/$f"); done

@@ -30,6 +30,9 @@ module tb_hps2pad;
 	reg  [ 7:0] joy0_x0 = 0, joy0_y0 = 0, joy0_x1 = 0, joy0_y1 = 0;
 	reg  [ 7:0] joy1_x0 = 0, joy1_y0 = 0, joy1_x1 = 0, joy1_y1 = 0;
 
+	wire [ 8:0] GUN_X, GUN_Y;
+	wire        GUN_ON;
+
 	integer errors = 0;
 	integer checks = 0;
 
@@ -69,7 +72,11 @@ module tb_hps2pad;
 		.joy1_y0(joy1_y0),
 		.joy1_x1(joy1_x1),
 		.joy1_y1(joy1_y1),
-		.ps2_mouse(ps2_mouse)
+		.ps2_mouse(ps2_mouse),
+
+		.GUN_X(GUN_X),
+		.GUN_Y(GUN_Y),
+		.GUN_ON(GUN_ON)
 	);
 
 	// one bus tick = one CE period
@@ -178,6 +185,18 @@ module tb_hps2pad;
 		end
 	endtask
 
+	// the crosshair is shown when a gun is on the bus: the arcade gun, or the
+	// home gun with at most 2 pads
+	task automatic check_on(input exp, input [255:0] name);
+		begin
+			checks = checks + 1;
+			if (GUN_ON !== exp) begin
+				errors = errors + 1;
+				$display("FAIL GUN_ON %0s: got %b expected %b", name, GUN_ON, exp);
+			end
+		end
+	endtask
+
 	function automatic [15:0] ref_pad(input [12:0] j);
 		ref_pad = {1'b1, 2'b00, j[2], j[3], j[0], j[1], j[4], j[5], j[6], j[7], j[8], j[9], j[10], 2'b00};
 	endfunction
@@ -224,6 +243,12 @@ module tb_hps2pad;
 						errors = errors + 1;
 						if (errors < 20) $display("FAIL decode pal=%0d pixel %0d,%0d decodes to %0d,%0d", pal, px, py, dx, dy);
 					end
+					// the crosshair position is the pixel the count encodes
+					checks = checks + 1;
+					if (GUN_X !== px || GUN_Y !== py) begin
+						errors = errors + 1;
+						if (errors < 20) $display("FAIL crosshair pal=%0d aim %0d,%0d: GUN_X,GUN_Y %0d,%0d expected %0d,%0d", pal, ux, uy, GUN_X, GUN_Y, px, py);
+					end
 				end
 			end
 			check_pixel(-127, -127,   0,   0, "top left");
@@ -269,6 +294,7 @@ module tb_hps2pad;
 			cnt = ref_counter(ux, uy);
 			gun = {8'h4D, i[0], 3'b000, 1'b0, 2'b00, cnt, 5'h1F};
 			check({gun, {NBITS-40{1'b1}}}, "gun only");
+			check_on(1, "gun only");
 		end
 
 		// 3. option button
@@ -292,6 +318,12 @@ module tb_hps2pad;
 		joy1_y0 = to_axis(-51);
 		frame();
 		check({8'h4D, 1'b1, 3'b000, 1'b0, 2'b00, ref_counter(72, -51), 5'h1F, ref_pad(13'h0425), {NBITS-56{1'b1}}}, "gun joy2 + pad");
+		check_on(1, "gun joy2 + pad");
+		checks = checks + 1;
+		if (GUN_X !== ref_px(72, 319) || GUN_Y !== ref_px(-51, 239)) begin
+			errors = errors + 1;
+			$display("FAIL crosshair joy2: %0d,%0d", GUN_X, GUN_Y);
+		end
 
 		// 6. the gun on joystick 0 followed by two pads
 		PAD_SEL = 2;
@@ -299,11 +331,13 @@ module tb_hps2pad;
 		joystick_1 = 13'h0081;
 		frame();
 		check({8'h4D, 1'b0, 3'b000, 1'b1, 2'b00, ref_counter(-118, -108), 5'h1F, ref_pad(13'h0425), ref_pad(13'h0081), {NBITS-72{1'b1}}}, "gun joy1 + 2 pads");
+		check_on(1, "gun joy1 + 2 pads");
 
 		// 7. gun is not available with 3 pads
 		PAD_SEL = 3;
 		frame();
 		check({NBITS{1'b1}}, "3 pads + gun");
+		check_on(0, "3 pads + gun");
 
 		// 8. arcade gun: trigger, service, coin, start
 		PAD_SEL = 1;
@@ -314,6 +348,7 @@ module tb_hps2pad;
 		joystick_1 = 13'd0;
 		frame();
 		check({8'h4D, 1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 2'b00, ref_counter(-118, -108), 5'h1F, {NBITS-40{1'b1}}}, "arcade gun coin");
+		check_on(1, "arcade gun");
 		ARCADE_SERVICE = 0;
 		joystick_0 = BTN_START;
 		frame();
@@ -331,12 +366,14 @@ module tb_hps2pad;
 		joystick_1 = 13'h0081;
 		frame();
 		check({ref_pad(13'h0425), ref_pad(13'h0081), {NBITS-32{1'b1}}}, "2 pads, gun off");
+		check_on(0, "2 pads, gun off");
 		ARCADE_SEL = 1;
 		joystick_0 = BTN_START;
 		joystick_1 = BTN_COIN;
 		ARCADE_SERVICE = 1;
 		frame();
 		check({8'h49, 4'b0000, 20'd0, 8'hC0, 8'h00, 8'b00010011, 8'h00, {NBITS-64{1'b1}}}, "arcade trackball");
+		check_on(0, "arcade trackball");
 
 		// 11. PAL scan constants on the bus
 		ARCADE_SEL = 0;

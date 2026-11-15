@@ -318,6 +318,7 @@ module emu
 		"D3P2O[41:40],Light gun,Off,Joy1,Joy2;",
 		"P2O[38:37],Arcade control,Off,Trackball,LightGun;",
 		"P2O[39],Arcade service,Off,On;",
+		"D4P2O[43:42],Crosshair,Small,Large,Off;",
 		"P2-;",
 
 		"P3,Hardware;",
@@ -337,7 +338,9 @@ module emu
 	};
 
 	wire [63:0] status;
-	wire [15:0] status_menumask = {12'd0,gun_mask,mouse_mask,stick_mask,~bk_ena};
+	wire [ 8:0] gun_x, gun_y;
+	wire        gun_on;
+	wire [15:0] status_menumask = {11'd0,~gun_on,gun_mask,mouse_mask,stick_mask,~bk_ena};
 	
 	wire  [1:0] buttons;
 	wire [15:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -849,7 +852,11 @@ module emu
 		.joy1_y0(joy1_y0),
 		.joy1_x1(joy1_x1),
 		.joy1_y1(joy1_y1),
-		.ps2_mouse(ps2_mouse)
+		.ps2_mouse(ps2_mouse),
+
+		.GUN_X(gun_x),
+		.GUN_Y(gun_y),
+		.GUN_ON(gun_on)
 	);
 	
 	
@@ -1276,6 +1283,29 @@ module emu
 	assign VGA_SL = {~INTERLACE,~INTERLACE} & sl[1:0];
 	assign VGA_F1 = INTERLACE & FIELD;
 	
+	reg  [1:0] cross_sel;
+	reg        cross_on;
+	always @(posedge clk_vid) begin
+		cross_sel <= status[43:42];
+		cross_on <= gun_on;
+	end
+	wire cross_draw, cross_white;
+	GUN_CROSS gun_cross
+	(
+		.CLK(clk_vid),
+		.DCLK(DCLK),
+		.HBLK_N(HBL_N),
+		.VBLK_N(VBL_N),
+
+		.EN(cross_on && cross_sel < 2'd2),
+		.LARGE(cross_sel == 2'd1),
+		.GUN_X(gun_x),
+		.GUN_Y(gun_y),
+
+		.DRAW(cross_draw),
+		.COLOR(cross_white)
+	);
+
 	wire vga_de;
 	video_mixer #(.LINE_LENGTH(8), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	(
@@ -1288,9 +1318,9 @@ module emu
 	
 		.VGA_DE(vga_de),
 
-		.R(R),
-		.G(G),
-		.B(B),
+		.R(cross_draw ? {8{cross_white}} : R),
+		.G(cross_draw ? {8{cross_white}} : G),
+		.B(cross_draw ? {8{cross_white}} : B),
 	
 		// Positive pulses.
 		.HSync(~HS_N),

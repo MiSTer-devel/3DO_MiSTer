@@ -30,7 +30,11 @@ module HPS2PAD (
 	input      [7 : 0] joy1_y0,
 	input      [7 : 0] joy1_x1,
 	input      [7 : 0] joy1_y1,
-	input      [24: 0] ps2_mouse
+	input      [24: 0] ps2_mouse,
+
+	output     [ 8: 0] GUN_X,          //light gun aim, framebuffer pixel 0..319
+	output     [ 8: 0] GUN_Y,          //0..239
+	output             GUN_ON          //a light gun is connected (home or arcade)
 );
 	
 	function automatic [7:0] stick_axis(input signed [7:0] axis);
@@ -277,6 +281,10 @@ module HPS2PAD (
 		end
 	end
 	
+	assign GUN_X = lg_px;
+	assign GUN_Y = lg_py;
+	assign GUN_ON = gun_arcade || (GUN_SEL != 2'd0 && !ARCADE_SEL && PAD_SEL <= 3'd2);
+
 	//home gun: a shot off screen is seen as trigger with no light detected
 	wire [39:0] gun_data = {
 		8'h4D,
