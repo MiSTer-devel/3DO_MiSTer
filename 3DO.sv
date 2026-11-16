@@ -485,7 +485,9 @@ module emu
 		end
 		if (!bios_download && bios_download_old) begin
 			bios_pal <= (cs == 32'hD63EC5E9 || //Panasonic FZ-1 (E)
-			             cs == 32'hD5CFD1C5);  //Panasonic FZ-1 (E) (unencrypted)
+			             cs == 32'hD5CFD1C5 || //Panasonic FZ-1 (E) (unencrypted)
+			             cs == 32'hD439B8FE || //Panasonic FZ-10 (E) ANVIL
+			             cs == 32'hD439B6FE);  //Panasonic FZ-10 (E) ANVIL (no RSA)
 		end 
 		
 		case (status[16:15])
