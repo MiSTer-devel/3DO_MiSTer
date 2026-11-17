@@ -541,15 +541,16 @@ module emu
 	reg  [ 3: 0] BRAM1_OFFS;//Block 0x10000
 	reg          NEED_DSP_PAUSE;
 	// Arcade game ID, sent by the MRA as a one-byte ROM on ioctl index 16.
-	// 0 = console (no MRA), 1 = Orbatak, 2 = Shootout at Old Tucson, 3 = Mad Dog II.
+	// High nibble: control type (1 = trackball, 2 = light gun). Low nibble: game parameter.
+	// 0x10 = Orbatak, 0x20 = Shootout at Old Tucson, 0x21 = Mad Dog II, 0x00 = console (no MRA).
 	// Loading an MRA reloads the FPGA, so the ID stays 0 for console launches.
-	localparam [1:0] ARCADE_TRACKBALL = 2'd1, ARCADE_SHOOTOUT = 2'd2, ARCADE_MAD_DOG_II = 2'd3;
-	reg    [1:0] arcade_sel = 0;
-	wire         arcade_active = |arcade_sel;
-	wire         arcade_trackball = (arcade_sel == ARCADE_TRACKBALL);
-	wire         arcade_lightgun = (arcade_sel == ARCADE_SHOOTOUT || arcade_sel == ARCADE_MAD_DOG_II);
+	reg    [7:0] arcade_id = 0;
+	wire         arcade_active = |arcade_id;
+	wire         arcade_trackball = (arcade_id[7:4] == 4'h1);
+	wire         arcade_lightgun = (arcade_id[7:4] == 4'h2);
+	wire   [1:0] arcade_sel = {arcade_lightgun,arcade_trackball};
 	always @(posedge clk_sys) begin
-		if (arcade_id_download && ioctl_wr && !ioctl_addr) arcade_sel <= ioctl_data[1:0];
+		if (arcade_id_download && ioctl_wr && !ioctl_addr) arcade_id <= ioctl_data[7:0];
 	end
 
 	always @(posedge clk_sys) begin
@@ -831,6 +832,7 @@ module emu
 	
 		.PAD_SEL(pad_sel),
 		.ARCADE_SEL(arcade_sel),
+		.ARCADE_PARAM(arcade_id[3:0]),
 		.STICK_EN(status[35]&~stick_mask),
 		.MOUSE_EN(arcade_active ? arcade_trackball && status[37] : status[36] && !mouse_mask),
 		.ARCADE_SERVICE(arcade_active && status[39]),

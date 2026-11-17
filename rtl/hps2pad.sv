@@ -12,6 +12,7 @@ module HPS2PAD (
 	
 	input      [ 2: 0] PAD_SEL,
 	input      [ 1: 0] ARCADE_SEL,
+	input      [ 3: 0] ARCADE_PARAM,
 	input              STICK_EN,
 	input              MOUSE_EN,
 	input              ARCADE_SERVICE,
@@ -31,7 +32,7 @@ module HPS2PAD (
 	input      [24: 0] ps2_mouse
 );
 
-	localparam [1:0] ARCADE_TRACKBALL = 2'd1, ARCADE_SHOOTOUT = 2'd2, ARCADE_MAD_DOG_II = 2'd3;
+	localparam [1:0] ARCADE_TRACKBALL = 2'd1, ARCADE_LIGHTGUN = 2'd2;
 	localparam [19:0] GUN_LINE_TICKS = 20'd1271;
 	
 	function automatic [7:0] stick_axis(input signed [7:0] axis);
@@ -220,13 +221,14 @@ module HPS2PAD (
 		end
 	endfunction
 
-	wire mad_dog_ii = (ARCADE_SEL == ARCADE_MAD_DOG_II);
+	// Light gun parameter: 0 = Shootout at Old Tucson aim origin, 1 = Mad Dog II aim origin.
+	wire mad_dog_ii = (ARCADE_PARAM == 4'd1);
 	wire [39:0] gun1_data = lightgun_data(stick0_x,stick0_y,joystick_0,1'b0,mad_dog_ii);
 	wire [39:0] gun2_data = lightgun_data(stick1_x,stick1_y,joystick_1,ARCADE_SERVICE,mad_dog_ii);
 
 	bit [255: 0] IN_DATA;
 	always_comb begin
-		if (ARCADE_SEL == ARCADE_SHOOTOUT || mad_dog_ii)
+		if (ARCADE_SEL == ARCADE_LIGHTGUN)
 			// ALG games expect player 2 first, then player 1.
 			IN_DATA = {gun2_data,gun1_data,16'd0,{160{1'b1}}};
 		else if (ARCADE_SEL == ARCADE_TRACKBALL)

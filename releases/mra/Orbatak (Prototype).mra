@@ -4,9 +4,9 @@
 	<description>Orbatak (Prototype)</description>
 	<rotation>horizontal</rotation>
 	<manufacturer>American Laser Games</manufacturer>
-	<buttons names="-,-,-,Start,Coin" default="-,-,-,Start,Select" />
+	<buttons names="-,-,-,Start,Coin" default="Start,Select" />
 	<rom index="16">
-		<part>01 00</part>
+		<part>10 00</part>
 	</rom>
 	<rom index="0" zip="alg3do.zip" md5="8970fc987ab89a7f64da9f8a8c4333ff">
 		<part name="saot_rom2.bin" crc="b832da9a" />

@@ -16,12 +16,15 @@ copy of that same RBF under `_Arcade/cores` and install the MRAs from
 `releases/mra`. Use a MiSTer Main build that can mount 3DO IMG files directly
 from MRAs and retain the BIOS supplied by the MRA.
 
-Each MRA sends a game ID to the core as a one-byte ROM on index 16
-(`1` Orbatak, `2` Shootout at Old Tucson, `3` Mad Dog II). With a non-zero ID
-the OSD hides the console options and shows the arcade ones: Orbatak shows its
-trackball input selector; the lightgun games show both crosshair settings.
-Launched as a console core (no MRA), the ID is `0` and only console options
-are shown. To add a game, give it a new ID in its MRA and in `3DO.sv`.
+Each MRA sends a game ID to the core as a one-byte ROM on index 16. The high
+nibble selects the controls (`1` trackball, `2` lightgun) and the low nibble is
+a per-game parameter: `0x10` Orbatak, `0x20` Shootout at Old Tucson, `0x21`
+Mad Dog II (its lightgun aim origin). With a non-zero ID the OSD hides the
+console options and shows the arcade ones: Orbatak shows its trackball input
+selector; the lightgun games show both crosshair settings. Launched as a
+console core (no MRA), the ID is `0` and only console options are shown. A new
+game that uses the trackball, or a lightgun with one of these aim origins,
+needs only an MRA with its ID.
 
 Put `alg3do.zip` in `games/mame`. All three MRAs load `saot_rom2.bin` from it.
 The game discs are single-track Mode 1 images with 2048 bytes per sector.

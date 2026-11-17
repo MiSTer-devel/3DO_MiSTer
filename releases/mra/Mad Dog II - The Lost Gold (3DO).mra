@@ -4,9 +4,9 @@
 	<description>Mad Dog II: The Lost Gold (3DO)</description>
 	<rotation>horizontal</rotation>
 	<manufacturer>American Laser Games</manufacturer>
-	<buttons names="Trigger,Holster,-,Start,Coin" default="A,B,-,Start,Select" />
+	<buttons names="Trigger,Holster,-,Start,Coin" default="A,B,Start,Select" />
 	<rom index="16">
-		<part>03 00</part>
+		<part>21 00</part>
 	</rom>
 	<rom index="0" zip="alg3do.zip" md5="8970fc987ab89a7f64da9f8a8c4333ff">
 		<part name="saot_rom2.bin" crc="b832da9a" />
