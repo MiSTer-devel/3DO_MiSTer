@@ -11,5 +11,5 @@
 	<rom index="0" zip="alg3do.zip" md5="8970fc987ab89a7f64da9f8a8c4333ff">
 		<part name="saot_rom2.bin" crc="b832da9a" />
 	</rom>
-	<file delay="0" type="s" index="0" root="games" path="mame/md23do/mad dog ii.img" />
+	<file delay="0" type="s" index="0" root="games" path="mame/md23do/mad dog ii.chd" />
 </misterromdescription>
