@@ -1,0 +1,15 @@
+<misterromdescription>
+	<rbf>3DO</rbf>
+	<setname same_dir="1">md23do</setname>
+	<description>Mad Dog II: The Lost Gold (3DO)</description>
+	<rotation>horizontal</rotation>
+	<manufacturer>American Laser Games</manufacturer>
+	<buttons names="Trigger,Holster,-,Start,Coin" default="A,B,Start,Select" />
+	<rom index="16">
+		<part>21 00</part>
+	</rom>
+	<rom index="0" zip="alg3do.zip" md5="8970fc987ab89a7f64da9f8a8c4333ff">
+		<part name="saot_rom2.bin" crc="b832da9a" />
+	</rom>
+	<file delay="0" type="s" index="0" root="games" path="mame/md23do/mad dog ii.chd" />
+</misterromdescription>

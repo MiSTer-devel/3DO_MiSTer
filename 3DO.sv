@@ -296,28 +296,30 @@ module emu
 	`include "build_id.v"
 	localparam CONF_STR = {
 		"3DO;;",
-		"S0,CUEISO,Insert Disk;",
-		"FS2,BIN,Load bios;",
-		"-;",
-		"OFG,Region,BIOS,NTSC,PAL;",
+		"h3S0,CUEISO,Insert Disk;",
+		"h3FS2,BIN,Load bios;",
+		"h3-;",
+		"h3OFG,Region,BIOS,NTSC,PAL;",
 
-		"-;",
-		"D0RC,Load Backup RAM;",
+		"h3-;",
+		"H5O[37],Trackball Input,Joystick,Mouse/Trackball;",
+		"H4O[41:40],P1 Crosshair,Off,Small,Medium,Large;",
+		"H4O[43:42],P2 Crosshair,Off,Small,Medium,Large;",
+		"H3O[39],Arcade Service,Off,On;",
+		"h3D0RC,Load Backup RAM;",
 		"D0RD,Save Backup RAM;",
-		"D0OE,Autosave,Off,On;",
+		"h3D0OE,Autosave,Off,On;",
 		
 		"-;",
 		"P1,Audio & Video;",
 		"P1O67,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 		"P1O89,Vertical Crop,Disabled,216p(5x),224p;",
 	
-		"P2,Input;",
-		"P2O[34:32],Pad,1,2,3,4,Off;",
-		"D1P2O[35],Flightstick,Off,On;",
-		"D2P2O[36],Mouse,Off,On;",
-		"P2O[38:37],Arcade control,Off,Trackball;",/*,LightGun*/
-		"P2O[39],Arcade service,Off,On;",
-		"P2-;",
+		"h3P2,Input;",
+		"h3P2O[34:32],Pad,1,2,3,4,Off;",
+		"h3D1P2O[35],Flightstick,Off,On;",
+		"h3D2P2O[36],Mouse,Off,On;",
+		"h3P2-;",
 
 		"P3,Hardware;",
 		"P3OJ,Video mode,240p,480i(original);",
@@ -329,14 +331,14 @@ module emu
 		
 		"-;",
 		"R0,Reset;",
-		"J1,A,B,C,P,X,R,L,T/Start,Coin;",
-		"jn,A,B,X,Start,Select,R,L,L2,R2;",
-		"jp,A,B,X,Start,Select,R,L,L2,R2;",
+		"J1,A,B,C,Play,Stop,R,L,Trigger(Flightstick);",
+		"jn,A,B,X,Start,Select,R,L,L2;",
+		"jp,A,B,X,Start,Select,R,L,L2;",
 		"V,v",`BUILD_DATE
 	};
 
 	wire [63:0] status;
-	wire [15:0] status_menumask = {13'd0,mouse_mask,stick_mask,~bk_ena};
+	wire [15:0] status_menumask = {10'd0,~arcade_trackball,~arcade_lightgun,~arcade_active,mouse_mask,stick_mask,~bk_ena};
 	
 	wire  [1:0] buttons;
 	wire [15:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -426,6 +428,7 @@ module emu
 	wire cdd_data_download = ioctl_download & (ioctl_index[5:2] == 4'b0010);
 	wire cdd_info_download = ioctl_download & (ioctl_index[5:2] == 4'b0011);
 	wire save_download = ioctl_download & (ioctl_index[5:2] == 4'b0001);
+	wire arcade_id_download = ioctl_download & (ioctl_index == 8'd16);
 	
 	reg osd_btn = 0;
 //	always @(posedge clk_sys) begin
@@ -488,7 +491,7 @@ module emu
 			             cs == 32'hD5CFD1C5);  //Panasonic FZ-1 (E) (unencrypted)
 		end 
 		
-		case (status[16:15])
+		case (arcade_active ? 2'h1 : status[16:15])
 			2'h0: PAL <= bios_pal;
 			2'h1: PAL <= 0;
 			default: PAL <= 1;
@@ -537,9 +540,22 @@ module emu
 	reg  [ 3: 0] BRAM2_OFFS;//Block 0x20000
 	reg  [ 3: 0] BRAM1_OFFS;//Block 0x10000
 	reg          NEED_DSP_PAUSE;
+	// Arcade game ID, sent by the MRA as a one-byte ROM on ioctl index 16.
+	// High nibble: control type (1 = trackball, 2 = light gun). Low nibble: game parameter.
+	// 0x10 = Orbatak, 0x20 = Shootout at Old Tucson, 0x21 = Mad Dog II, 0x00 = console (no MRA).
+	// Loading an MRA reloads the FPGA, so the ID stays 0 for console launches.
+	reg    [7:0] arcade_id = 0;
+	wire         arcade_active = |arcade_id;
+	wire         arcade_trackball = (arcade_id[7:4] == 4'h1);
+	wire         arcade_lightgun = (arcade_id[7:4] == 4'h2);
+	wire   [1:0] arcade_sel = {arcade_lightgun,arcade_trackball};
+	always @(posedge clk_sys) begin
+		if (arcade_id_download && ioctl_wr && !ioctl_addr) arcade_id <= ioctl_data[7:0];
+	end
+
 	always @(posedge clk_sys) begin
 		reg [31: 0] msf,id;
-	
+
 		if (cdd_info_download && ioctl_wr) begin
 			if (ioctl_addr == 25'h004) begin
 				msf[31:16] <= {ioctl_data[7:0],ioctl_data[15:8]};
@@ -797,9 +813,8 @@ module emu
 	
 	
 	wire [2:0] pad_sel = status[34:32] >= 3'd4 ? 3'd0 : status[34:32] + 3'd1;
-	wire [1:0] arcade_sel = status[38:37];
-	wire stick_mask = ~(pad_sel <= 3'd1 && !arcade_sel);
-	wire mouse_mask = ~(pad_sel <= 3'd2 && !arcade_sel);
+	wire stick_mask = ~(pad_sel <= 3'd1 && !arcade_active);
+	wire mouse_mask = ~(pad_sel <= 3'd2 && !arcade_active);
 	
 	HPS2PAD pad
 	(
@@ -817,14 +832,15 @@ module emu
 	
 		.PAD_SEL(pad_sel),
 		.ARCADE_SEL(arcade_sel),
+		.ARCADE_PARAM(arcade_id[3:0]),
 		.STICK_EN(status[35]&~stick_mask),
-		.MOUSE_EN(status[36]&~mouse_mask),
-		.ARCADE_SERVICE(status[39]),
+		.MOUSE_EN(arcade_active ? arcade_trackball && status[37] : status[36] && !mouse_mask),
+		.ARCADE_SERVICE(arcade_active && status[39]),
 	
-		.joystick_0(joystick_0[12:0]),
-		.joystick_1(joystick_1[12:0]),
-		.joystick_2(joystick_2[12:0]),
-		.joystick_3(joystick_3[12:0]),
+		.joystick_0(joystick_0[11:0]),
+		.joystick_1(joystick_1[11:0]),
+		.joystick_2(joystick_2[11:0]),
+		.joystick_3(joystick_3[11:0]),
 		.joy0_x0(joy0_x0),
 		.joy0_y0(joy0_y0),
 		.joy0_x1(joy0_x1),
@@ -1059,7 +1075,7 @@ module emu
 	wire bk_change  = ~SRAMW_N;
 	wire bk_load    = status[12];
 	wire bk_save    = status[13];
-	wire autosave   = status[14];
+	wire autosave   = arcade_active || status[14];
 
 	reg bk_ena = 0;
 	reg sav_pending = 0;
@@ -1217,6 +1233,25 @@ module emu
 	assign VGA_SL = {~INTERLACE,~INTERLACE} & sl[1:0];
 	assign VGA_F1 = INTERLACE & FIELD;
 	
+	wire [23:0] crosshair_rgb;
+	P3DO_CROSSHAIR crosshair
+	(
+		.clk_sys(clk_sys),
+		.clk_vid(clk_vid),
+		.ce_pix(DCLK),
+		.hblank(~HBL_N),
+		.vblank(~VBL_N),
+		.enable(arcade_lightgun),
+		.size0(status[41:40]),
+		.size1(status[43:42]),
+		.holster0(joystick_0[5]),
+		.holster1(joystick_1[5]),
+		.aim0({joy0_x0,joy0_y0}),
+		.aim1({joy1_x0,joy1_y0}),
+		.rgb_in({R,G,B}),
+		.rgb_out(crosshair_rgb)
+	);
+
 	wire vga_de;
 	video_mixer #(.LINE_LENGTH(8), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	(
@@ -1229,9 +1264,9 @@ module emu
 	
 		.VGA_DE(vga_de),
 
-		.R(R),
-		.G(G),
-		.B(B),
+		.R(crosshair_rgb[23:16]),
+		.G(crosshair_rgb[15:8]),
+		.B(crosshair_rgb[7:0]),
 	
 		// Positive pulses.
 		.HSync(~HS_N),

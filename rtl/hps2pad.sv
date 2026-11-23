@@ -12,14 +12,15 @@ module HPS2PAD (
 	
 	input      [ 2: 0] PAD_SEL,
 	input      [ 1: 0] ARCADE_SEL,
+	input      [ 3: 0] ARCADE_PARAM,
 	input              STICK_EN,
 	input              MOUSE_EN,
 	input              ARCADE_SERVICE,
 	
-	input      [12: 0] joystick_0,
-	input      [12: 0] joystick_1,
-	input      [12: 0] joystick_2,
-	input      [12: 0] joystick_3,
+	input      [11: 0] joystick_0,
+	input      [11: 0] joystick_1,
+	input      [11: 0] joystick_2,
+	input      [11: 0] joystick_3,
 	input      [7 : 0] joy0_x0,
 	input      [7 : 0] joy0_y0,
 	input      [7 : 0] joy0_x1,
@@ -30,6 +31,9 @@ module HPS2PAD (
 	input      [7 : 0] joy1_y1,
 	input      [24: 0] ps2_mouse
 );
+
+	localparam [1:0] ARCADE_TRACKBALL = 2'd1, ARCADE_LIGHTGUN = 2'd2;
+	localparam [19:0] GUN_LINE_TICKS = 20'd1271;
 	
 	function automatic [7:0] stick_axis(input signed [7:0] axis);
 		reg signed [8:0] v;
@@ -59,6 +63,18 @@ module HPS2PAD (
 			if (axis > 11'sd96) mouse_step = 10'sd96;
 			else if (axis < -11'sd96) mouse_step = -10'sd96;
 			else mouse_step = axis[9:0];
+		end
+	endfunction
+
+	function automatic signed [9:0] trackball_step(input signed [7:0] axis);
+		reg [8:0] magnitude;
+		reg signed [9:0] step;
+		begin
+			magnitude = axis[7] ? -{axis[7],axis} : {1'b0,axis};
+			step = 0;
+			if (magnitude > 9'd16)
+				step = $signed({1'b0, (magnitude - 9'd16 + 9'd3) >> 2});
+			trackball_step = axis[7] ? -step : step;
 		end
 	endfunction
 	
@@ -116,6 +132,9 @@ module HPS2PAD (
 	reg signed [10:0] mouse_y_acc = '0;
 	wire signed [9:0] mouse_x = mouse_step(mouse_x_acc);
 	wire signed [9:0] mouse_y = mouse_step(mouse_y_acc);
+	wire mouse_event = ps2_mouse[24] != mouse_toggle;
+	reg signed [9:0] mouse_x_sent, mouse_y_sent;
+	bit LATCH;
 	always @(posedge CLK) begin
 		reg signed [11:0] x;
 		reg signed [11:0] y;
@@ -132,11 +151,11 @@ module HPS2PAD (
 			y = {mouse_y_acc[10],mouse_y_acc};
 
 			if (LATCH) begin
-				x = x - $signed({{2{mouse_x[9]}},mouse_x});
-				y = y - $signed({{2{mouse_y[9]}},mouse_y});
+				x = x - $signed({{2{mouse_x_sent[9]}},mouse_x_sent});
+				y = y - $signed({{2{mouse_y_sent[9]}},mouse_y_sent});
 			end
 
-			if (ps2_mouse[24] != mouse_toggle) begin
+			if (mouse_event) begin
 				mouse_toggle <= ps2_mouse[24];
 				mouse_left <= ps2_mouse[0];
 				mouse_middle <= ps2_mouse[2];
@@ -161,20 +180,58 @@ module HPS2PAD (
 	};
 	
 	//arcade control
-	wire [31:0] arcade_silli = {8'hC0, 8'h00, {1'b0, 1'b0, joystick_0[12], joystick_1[12], 1'b0, joystick_1[11], joystick_0[11], ARCADE_SERVICE}, 8'h00};
+	wire [31:0] arcade_silli = {8'hC0, 8'h00, {1'b0, 1'b0, joystick_0[8], joystick_1[8], 1'b0, joystick_1[7], joystick_0[7], ARCADE_SERVICE}, 8'h00};
+	wire signed [9:0] trackball_x = MOUSE_EN ? mouse_x : trackball_step($signed(joy0_x0));
+	wire signed [9:0] trackball_y = MOUSE_EN ? mouse_y : trackball_step($signed(joy0_y0));
 	wire [31:0] arcade_tb = {
 		8'h49,
 		1'b0,
 		1'b0,
 		1'b0,
 		1'b0,
-		mouse_y[9:0],
-		mouse_x[9:0]
+		trackball_y,
+		trackball_x
 	};
 	
+	function automatic [39:0] lightgun_data(
+		input [7:0] x, y,
+		input [11:0] joy,
+		input service, mad_dog_ii
+	);
+		reg [11:0] scan;
+		reg [19:0] origin, counter;
+		reg [7:0] beam_x;
+		reg hit;
+		begin
+			scan = {y,4'b0} - {4'b0,y};
+			beam_x = x;
+			if (mad_dog_ii) begin
+				// The shot sprite is placed eight lines above the decoded point.
+				// Its visible center is ten pixels right and five lines down.
+				origin = 20'd260 + 20'd3 * GUN_LINE_TICKS;
+				beam_x = x < 8'd8 ? 8'd0 : x - 8'd8;
+			end else
+				// Shootout's factory NVRAM adds 90 pixels modulo 397 and subtracts 25 lines.
+				// Wrap horizontal phase without carrying into the line count.
+				origin = x < 8'd72 ? 20'd25 * GUN_LINE_TICKS + 20'd983 :
+				                    20'd25 * GUN_LINE_TICKS - 20'd288;
+			counter = origin + {10'd0,beam_x,2'b0} + (scan[11:4] * GUN_LINE_TICKS);
+			hit = scan[11:4] != 8'd0 && scan[11:4] != 8'd239;
+			lightgun_data = {8'h4D,joy[4],service,joy[8],joy[7],joy[5],2'b00,counter,4'd0,hit};
+		end
+	endfunction
+
+	// Light gun parameter: 0 = Shootout at Old Tucson aim origin, 1 = Mad Dog II aim origin.
+	wire mad_dog_ii = (ARCADE_PARAM == 4'd1);
+	wire [39:0] gun1_data = lightgun_data(stick0_x,stick0_y,joystick_0,1'b0,mad_dog_ii);
+	wire [39:0] gun2_data = lightgun_data(stick1_x,stick1_y,joystick_1,ARCADE_SERVICE,mad_dog_ii);
+
 	bit [255: 0] IN_DATA;
 	always_comb begin
-		if (ARCADE_SEL)
+		if (ARCADE_SEL == ARCADE_LIGHTGUN)
+			// ALG games expect player 2 first, then player 1.
+			IN_DATA = {gun2_data,gun1_data,16'd0,{160{1'b1}}};
+		else if (ARCADE_SEL == ARCADE_TRACKBALL)
 			IN_DATA = {arcade_tb,arcade_silli,{256-32-32{1'b1}}};
 		else
 			case ({MOUSE_EN,STICK_EN,PAD_SEL})
@@ -193,7 +250,6 @@ module HPS2PAD (
 			endcase
 	end
 
-	bit          LATCH;
 	always @(posedge CLK) begin
 		bit [  2: 0] STATE;
 		bit [255: 0] DIN,DOUT;
@@ -243,6 +299,9 @@ module HPS2PAD (
 							WAIT_CNT <= '1;
 							if (!PBCLK) begin
 								DOUT <= IN_DATA;
+								// Drain only the mouse motion captured in this packet.
+								mouse_x_sent <= mouse_x;
+								mouse_y_sent <= mouse_y;
 								LATCH <= 1'b1;
 //								BIT_CNT <= '0;
 								STATE <= 3'd4;

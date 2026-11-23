@@ -2,6 +2,7 @@ set_global_assignment -name QIP_FILE rtl/ARM6/ARM6.qip
 set_global_assignment -name QIP_FILE rtl/3DO/3DO.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/3DO_mem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/3DO_CDROM.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/3DO_crosshair.sv
 set_global_assignment -name VHDL_FILE rtl/CEGen.vhd
 set_global_assignment -name VHDL_FILE rtl/bram.vhd
 set_global_assignment -name VHDL_FILE rtl/mlab.vhd
